@@ -12,7 +12,7 @@
  *      tool_use, tool_result, usage
  *   5. On `agent_end` we finish the SSE stream
  *
- * Extension UI requests from pi are auto-resolved (the web UI has no
+ * Extension UI requests from pi are denied/cancelled (the web UI has no
  * dialog surfaces), and fire-and-forget notifications are silently
  * consumed to keep the protocol clean.
  */
@@ -22,8 +22,9 @@ import { createJsonLineStream } from './acp.js';
 // sendCommand is scoped inside attachPiRpcSession to avoid sharing
 // the RPC id counter across concurrent sessions.
 
-// Auto-approve any extension UI dialog (select/confirm/input/editor).
-// The web UI has no surface for these; resolving them keeps pi unblocked.
+// Deny any extension UI dialog (select/confirm/input/editor). The web UI has
+// no surface for these; resolving them closed keeps pi unblocked without
+// approving an action the user never saw.
 // Fire-and-forget methods (setStatus, setWidget, notify, setTitle, set_editor_text)
 // are silently consumed — no response is expected.
 const FIRE_AND_FORGET_METHODS = new Set([
@@ -34,29 +35,18 @@ const FIRE_AND_FORGET_METHODS = new Set([
   'set_editor_text',
 ]);
 
-function replyExtensionUi(writable, raw) {
+export function replyExtensionUi(writable, raw) {
   if (raw?.id == null) return;
 
   // Fire-and-forget: no response expected. Silently consume.
   if (FIRE_AND_FORGET_METHODS.has(raw.method)) return;
 
-  // Dialog methods: auto-resolve to keep pi unblocked.
-  // confirm → true, select/input/editor → empty-ish default
+  // Dialog methods: fail closed to keep security-sensitive approvals explicit.
   let result;
   if (raw.method === 'confirm') {
-    result = { confirmed: true };
+    result = { confirmed: false, cancelled: true };
   } else {
-    // select: pick first option if available, else cancel
-    const opts = raw.params?.options ?? raw.options;
-    if (Array.isArray(opts) && opts.length > 0) {
-      const first = opts[0];
-      result =
-        typeof first === 'string'
-          ? { value: first }
-          : { value: first?.label ?? first?.value ?? '' };
-    } else {
-      result = { cancelled: true };
-    }
+    result = { cancelled: true };
   }
   writable.write(
     `${JSON.stringify({ type: 'extension_ui_response', id: raw.id, ...result })}\n`,
