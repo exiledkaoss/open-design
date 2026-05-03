@@ -1,7 +1,7 @@
 // @ts-nocheck
 import { test } from 'vitest';
 import assert from 'node:assert/strict';
-import { parsePiModels } from '../src/pi-rpc.js';
+import { parsePiModels, replyExtensionUi } from '../src/pi-rpc.js';
 
 // ─── parsePiModels ─────────────────────────────────────────────────────────
 
@@ -313,6 +313,52 @@ test('pi RPC: extension UI fire-and-forget events are silently consumed', () => 
   assert.equal(events.length, 1);
   assert.equal(events[0].type, 'status');
   assert.equal(events[0].label, 'working');
+});
+
+test('pi RPC: extension UI confirm dialogs fail closed', () => {
+  const written = [];
+  const mockWritable = {
+    write(data) {
+      written.push(data);
+    },
+  };
+
+  replyExtensionUi(mockWritable, {
+    type: 'extension_ui_request',
+    id: 'confirm-1',
+    method: 'confirm',
+  });
+
+  assert.equal(written.length, 1);
+  assert.deepEqual(JSON.parse(written[0].trim()), {
+    type: 'extension_ui_response',
+    id: 'confirm-1',
+    confirmed: false,
+    cancelled: true,
+  });
+});
+
+test('pi RPC: extension UI selection dialogs are cancelled by default', () => {
+  const written = [];
+  const mockWritable = {
+    write(data) {
+      written.push(data);
+    },
+  };
+
+  replyExtensionUi(mockWritable, {
+    type: 'extension_ui_request',
+    id: 'select-1',
+    method: 'select',
+    params: { options: ['allow', 'deny'] },
+  });
+
+  assert.equal(written.length, 1);
+  assert.deepEqual(JSON.parse(written[0].trim()), {
+    type: 'extension_ui_response',
+    id: 'select-1',
+    cancelled: true,
+  });
 });
 
 test('pi RPC: response events are silently consumed', () => {

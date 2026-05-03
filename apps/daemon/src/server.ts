@@ -232,6 +232,13 @@ export function createCompatApiErrorResponse(code, message, init = {}) {
   return { error: createCompatApiError(code, message, init) };
 }
 
+export function applyProjectFileResponseHeaders(res, file) {
+  if (file.mime === 'image/svg+xml') {
+    res.attachment(path.basename(file.name));
+  }
+  res.type(file.mime);
+}
+
 /**
  * @param {import('express').Response} res
  * @param {number} status
@@ -1186,6 +1193,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     try {
       const relPath = req.params[0];
       const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath);
+      applyProjectFileResponseHeaders(res, file);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
@@ -1219,6 +1227,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   app.get('/api/projects/:id/files/:name', async (req, res) => {
     try {
       const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name);
+      applyProjectFileResponseHeaders(res, file);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
