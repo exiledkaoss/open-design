@@ -565,6 +565,15 @@ function MediaProvidersSection({
       return { ...curr, mediaProviders: map };
     });
   };
+  const clearProvider = (provider: MediaProvider) => {
+    setCfg((curr) => ({
+      ...curr,
+      mediaProviders: {
+        ...(curr.mediaProviders ?? {}),
+        [provider.id]: { apiKey: '', baseUrl: '' },
+      },
+    }));
+  };
 
   return (
     <section className="settings-section">
@@ -617,7 +626,7 @@ function MediaProvidersSection({
                   type="button"
                   className="ghost"
                   disabled={!configured}
-                  onClick={() => updateProvider(provider, { apiKey: '', baseUrl: '' })}
+                  onClick={() => clearProvider(provider)}
                 >
                   {t('settings.mediaProviderClear')}
                 </button>
