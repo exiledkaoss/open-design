@@ -102,10 +102,29 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export function resolveProjectRoot(moduleDir: string): string {
   const base = path.basename(moduleDir);
+  const parent = path.basename(path.dirname(moduleDir));
+  if (base === 'src' && parent === 'dist') {
+    return path.resolve(moduleDir, '../..');
+  }
   const daemonDir = base === 'dist' || base === 'src'
     ? path.dirname(moduleDir)
     : moduleDir;
   return path.resolve(daemonDir, '../..');
+}
+
+export function resolveDaemonCliPath(moduleDir: string): string {
+  const base = path.basename(moduleDir);
+  const parentDir = path.dirname(moduleDir);
+  const parent = path.basename(parentDir);
+
+  if (base === 'src' && parent === 'dist') {
+    return path.join(parentDir, 'cli.js');
+  }
+  if (base === 'dist') {
+    return path.join(moduleDir, 'cli.js');
+  }
+
+  return path.join(resolveProjectRoot(moduleDir), 'apps', 'daemon', 'dist', 'cli.js');
 }
 
 const PROJECT_ROOT = resolveProjectRoot(__dirname);
@@ -159,7 +178,7 @@ const DAEMON_RESOURCE_ROOT = resolveDaemonResourceRoot();
 // when this project shipped with Vite; the daemon serves whatever the
 // frontend toolchain emits, no further config needed.
 const STATIC_DIR = path.join(PROJECT_ROOT, 'apps', 'web', 'out');
-const OD_BIN = path.join(PROJECT_ROOT, 'apps', 'daemon', 'dist', 'cli.js');
+const OD_BIN = resolveDaemonCliPath(__dirname);
 const SKILLS_DIR = resolveDaemonResourceDir(
   DAEMON_RESOURCE_ROOT,
   'skills',
@@ -183,6 +202,7 @@ const PROMPT_TEMPLATES_DIR = resolveDaemonResourceDir(
 const RUNTIME_DATA_DIR = process.env.OD_DATA_DIR
   ? path.resolve(PROJECT_ROOT, process.env.OD_DATA_DIR)
   : path.join(PROJECT_ROOT, '.od');
+const MEDIA_CONFIG_DIR = RUNTIME_DATA_DIR;
 const ARTIFACTS_DIR = path.join(RUNTIME_DATA_DIR, 'artifacts');
 const PROJECTS_DIR = path.join(RUNTIME_DATA_DIR, 'projects');
 fs.mkdirSync(PROJECTS_DIR, { recursive: true });
@@ -1306,7 +1326,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
   app.get('/api/media/config', async (_req, res) => {
     try {
-      const cfg = await readMaskedConfig(PROJECT_ROOT);
+      const cfg = await readMaskedConfig(MEDIA_CONFIG_DIR);
       res.json(cfg);
     } catch (err) {
       res.status(500).json({ error: String(err && err.message ? err.message : err) });
@@ -1315,7 +1335,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
   app.put('/api/media/config', async (req, res) => {
     try {
-      const cfg = await writeConfig(PROJECT_ROOT, req.body);
+      const cfg = await writeConfig(MEDIA_CONFIG_DIR, req.body);
       res.json(cfg);
     } catch (err) {
       const status = typeof err?.status === 'number' ? err.status : 400;
@@ -1349,7 +1369,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
       task.status = 'running';
       generateMedia({
-        projectRoot: PROJECT_ROOT,
+        projectRoot: MEDIA_CONFIG_DIR,
         projectsRoot: PROJECTS_DIR,
         projectId,
         surface: req.body?.surface,
