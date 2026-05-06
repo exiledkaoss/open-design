@@ -45,13 +45,13 @@ const ENV_KEYS = {
   fishaudio: ['OD_FISHAUDIO_API_KEY', 'FISH_AUDIO_API_KEY'],
 };
 
-function configFile(projectRoot) {
-  return path.join(projectRoot, '.od', 'media-config.json');
+export function resolveMediaConfigFile(dataDir) {
+  return path.join(dataDir, 'media-config.json');
 }
 
-async function readStored(projectRoot) {
+async function readStored(dataDir) {
   try {
-    const raw = await readFile(configFile(projectRoot), 'utf8');
+    const raw = await readFile(resolveMediaConfigFile(dataDir), 'utf8');
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.providers) {
       return parsed.providers;
@@ -63,8 +63,8 @@ async function readStored(projectRoot) {
   }
 }
 
-async function writeStored(projectRoot, providers) {
-  const file = configFile(projectRoot);
+async function writeStored(dataDir, providers) {
+  const file = resolveMediaConfigFile(dataDir);
   await mkdir(path.dirname(file), { recursive: true });
   await writeFile(file, JSON.stringify({ providers }, null, 2), 'utf8');
 }

@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveDaemonResourceRoot, resolveProjectRoot } from '../src/server.js';
+import { resolveDaemonCliPath, resolveDaemonResourceRoot, resolveProjectRoot } from '../src/server.js';
 
 describe('resolveProjectRoot', () => {
   it('resolves the repository root from the source daemon directory', () => {
@@ -21,10 +21,35 @@ describe('resolveProjectRoot', () => {
     expect(resolveProjectRoot(path.join(root, 'apps', 'daemon', 'dist'))).toBe(root);
   });
 
+  it('resolves the package root from a packaged sidecar dist/src directory', () => {
+    expect(
+      resolveProjectRoot('/Applications/Open Design.app/Contents/Resources/app/node_modules/@open-design/daemon/dist/src'),
+    ).toBe('/Applications/Open Design.app/Contents/Resources/app/node_modules/@open-design/daemon');
+  });
+
   it('resolves the repository root from the daemon src directory (tsx entry)', () => {
     const root = path.resolve(import.meta.dirname, '../../..');
 
     expect(resolveProjectRoot(path.join(root, 'apps', 'daemon', 'src'))).toBe(root);
+  });
+});
+
+describe('resolveDaemonCliPath', () => {
+  it('resolves the repository CLI path from source and workspace dist directories', () => {
+    const root = path.resolve(import.meta.dirname, '../../..');
+
+    expect(resolveDaemonCliPath(path.join(root, 'apps', 'daemon', 'src'))).toBe(
+      path.join(root, 'apps', 'daemon', 'dist', 'cli.js'),
+    );
+    expect(resolveDaemonCliPath(path.join(root, 'apps', 'daemon', 'dist'))).toBe(
+      path.join(root, 'apps', 'daemon', 'dist', 'cli.js'),
+    );
+  });
+
+  it('resolves the package CLI path from a packaged sidecar dist/src directory', () => {
+    expect(
+      resolveDaemonCliPath('/Applications/Open Design.app/Contents/Resources/app/node_modules/@open-design/daemon/dist/src'),
+    ).toBe('/Applications/Open Design.app/Contents/Resources/app/node_modules/@open-design/daemon/dist/cli.js');
   });
 });
 
