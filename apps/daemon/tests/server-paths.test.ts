@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveDaemonResourceRoot, resolveProjectRoot } from '../src/server.js';
+import { resolveDaemonCliPath, resolveDaemonResourceRoot, resolveProjectRoot } from '../src/server.js';
 
 describe('resolveProjectRoot', () => {
   it('resolves the repository root from the source daemon directory', () => {
@@ -25,6 +25,36 @@ describe('resolveProjectRoot', () => {
     const root = path.resolve(import.meta.dirname, '../../..');
 
     expect(resolveProjectRoot(path.join(root, 'apps', 'daemon', 'src'))).toBe(root);
+  });
+
+  it('resolves the repository root from the sidecar-compiled daemon server path', () => {
+    const root = path.resolve(import.meta.dirname, '../../..');
+
+    expect(resolveProjectRoot(path.join(root, 'apps', 'daemon', 'dist', 'src'))).toBe(root);
+  });
+
+  it('resolves to the package root outside the monorepo apps layout', () => {
+    const packageRoot = path.join('/tmp', 'app', 'node_modules', '@open-design', 'daemon');
+
+    expect(resolveProjectRoot(path.join(packageRoot, 'dist', 'src'))).toBe(packageRoot);
+  });
+});
+
+describe('resolveDaemonCliPath', () => {
+  it('resolves the built CLI from the source daemon directory', () => {
+    const root = path.resolve(import.meta.dirname, '../../..');
+
+    expect(resolveDaemonCliPath(path.join(root, 'apps', 'daemon', 'src'))).toBe(
+      path.join(root, 'apps', 'daemon', 'dist', 'cli.js'),
+    );
+  });
+
+  it('resolves the built CLI from the sidecar-compiled server path', () => {
+    const packageRoot = path.join('/tmp', 'app', 'node_modules', '@open-design', 'daemon');
+
+    expect(resolveDaemonCliPath(path.join(packageRoot, 'dist', 'src'))).toBe(
+      path.join(packageRoot, 'dist', 'cli.js'),
+    );
   });
 });
 

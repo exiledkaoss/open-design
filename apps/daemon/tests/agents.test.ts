@@ -3,6 +3,7 @@ import { afterEach, test } from 'vitest';
 import assert from 'node:assert/strict';
 import { AGENT_DEFS } from '../src/agents.js';
 
+const claude = AGENT_DEFS.find((agent) => agent.id === 'claude');
 const codex = AGENT_DEFS.find((agent) => agent.id === 'codex');
 const cursorAgent = AGENT_DEFS.find((agent) => agent.id === 'cursor-agent');
 const originalDisablePlugins = process.env.OD_CODEX_DISABLE_PLUGINS;
@@ -51,6 +52,13 @@ test('codex args keep plugins enabled when OD_CODEX_DISABLE_PLUGINS is not 1', (
   assert.equal(args.includes('--disable'), false);
   assert.equal(args.includes('plugins'), false);
   assert.equal(args.at(-1), '-');
+});
+
+test('claude args do not include add-dir before capability probing confirms support', () => {
+  const args = claude.buildArgs('', [], ['/tmp/od-skills']);
+
+  assert.equal(args.includes('--add-dir'), false);
+  assert.equal(args.includes('/tmp/od-skills'), false);
 });
 
 test('cursor-agent args deliver prompts via stdin without passing a literal dash prompt', () => {
