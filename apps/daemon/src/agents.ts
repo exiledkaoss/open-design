@@ -133,7 +133,7 @@ export const AGENT_DEFS = [
       );
       // `--add-dir` is older but still gate it for symmetry — old/forked
       // builds may lack it.
-      if (dirs.length > 0 && caps.addDir !== false) {
+      if (dirs.length > 0 && caps.addDir) {
         args.push('--add-dir', ...dirs);
       }
       args.push('--permission-mode', 'bypassPermissions');
