@@ -33,6 +33,16 @@ describe('PreviewModal fullscreen exit', () => {
     setNativeFullscreenElement(null);
   });
 
+  it('keeps preview HTML in an opaque-origin sandbox', () => {
+    const { container } = render(
+      <PreviewModal {...baseProps} onClose={vi.fn()} />,
+    );
+
+    const iframe = container.querySelector('iframe') as HTMLIFrameElement;
+    expect(iframe).toBeTruthy();
+    expect(iframe.getAttribute('sandbox')).toBe('allow-scripts');
+  });
+
   it('drops the fullscreen overlay when the browser exits native fullscreen', () => {
     const onClose = vi.fn();
     const { container } = render(
