@@ -13,7 +13,7 @@
 // We DO mask keys when reading via the GET endpoint so the UI doesn't
 // echo secrets back into the DOM.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MEDIA_PROVIDERS } from './media-models.js';
 
@@ -66,7 +66,13 @@ async function readStored(projectRoot) {
 async function writeStored(projectRoot, providers) {
   const file = configFile(projectRoot);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ providers }, null, 2), 'utf8');
+  await writeFile(file, JSON.stringify({ providers }, null, 2), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  await chmod(file, 0o600).catch(() => {
+    // Best effort on filesystems that do not support POSIX modes.
+  });
 }
 
 function readEnvKey(providerId) {
