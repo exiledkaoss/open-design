@@ -101,6 +101,16 @@ import {
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 export function resolveProjectRoot(moduleDir: string): string {
+  let current = path.resolve(moduleDir);
+  while (true) {
+    if (path.basename(current) === 'daemon' && path.basename(path.dirname(current)) === 'apps') {
+      return path.dirname(path.dirname(current));
+    }
+    const parent = path.dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+
   const base = path.basename(moduleDir);
   const daemonDir = base === 'dist' || base === 'src'
     ? path.dirname(moduleDir)
