@@ -176,6 +176,23 @@ export async function listActiveChatRuns(
   }
 }
 
+function waitForReconnect(signal: AbortSignal, ms: number): Promise<void> {
+  if (signal.aborted) {
+    return Promise.reject(new DOMException('aborted', 'AbortError'));
+  }
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => {
+      signal.removeEventListener('abort', onAbort);
+      resolve();
+    }, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException('aborted', 'AbortError'));
+    };
+    signal.addEventListener('abort', onAbort, { once: true });
+  });
+}
+
 async function consumeDaemonRun({
   runId,
   signal,
@@ -205,7 +222,27 @@ async function consumeDaemonRun({
       return;
     }
 
-    for (let reconnects = 0; endStatus === null && reconnects < 5;) {
+    let reconnects = 0;
+    while (endStatus === null) {
+      if (reconnects >= 5) {
+        const status = await fetchChatRunStatus(runId);
+        if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
+          endStatus = status.status;
+          exitCode = status.exitCode ?? null;
+          exitSignal = status.signal ?? null;
+          onRunStatus?.(endStatus);
+          break;
+        }
+        if (status && isChatRunStatus(status.status)) {
+          onRunStatus?.(status.status);
+          reconnects = 0;
+          await waitForReconnect(signal, 500);
+          continue;
+        }
+        handlers.onError(new Error('daemon stream disconnected before run completed'));
+        return;
+      }
+
       const qs = lastEventId ? `?after=${encodeURIComponent(lastEventId)}` : '';
       let resp: Response;
       try {
@@ -304,19 +341,6 @@ async function consumeDaemonRun({
         }
       }
       reconnects = sawStreamProgress ? 0 : reconnects + 1;
-    }
-
-    if (endStatus === null) {
-      const status = await fetchChatRunStatus(runId);
-      if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
-        endStatus = status.status;
-        exitCode = status.exitCode ?? null;
-        exitSignal = status.signal ?? null;
-        onRunStatus?.(endStatus);
-      } else {
-        handlers.onError(new Error('daemon stream disconnected before run completed'));
-        return;
-      }
     }
 
     if (endStatus === 'canceled') return;

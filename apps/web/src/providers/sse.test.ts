@@ -398,6 +398,51 @@ describe('streamViaDaemon', () => {
     expect(handlers.onDone).toHaveBeenCalledWith('');
   });
 
+  it('keeps reattaching when reconnects are exhausted while the run is still active', async () => {
+    vi.useFakeTimers();
+    try {
+      const handlers = createDaemonHandlers();
+      const onRunStatus = vi.fn();
+      let eventFetches = 0;
+      const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === '/api/runs') return jsonResponse({ runId: 'run-1' });
+        if (url === '/api/runs/run-1/events') {
+          eventFetches += 1;
+          if (eventFetches <= 5) return sseResponse('');
+          return sseResponse('event: end\ndata: {"code":0,"status":"succeeded"}\n\n');
+        }
+        if (url === '/api/runs/run-1') {
+          return new Response(JSON.stringify({ id: 'run-1', status: 'running' }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          });
+        }
+        throw new Error(`unexpected fetch ${url}`);
+      });
+      vi.stubGlobal('fetch', fetchMock);
+
+      const run = streamViaDaemon({
+        agentId: 'mock',
+        history: [{ id: '1', role: 'user', content: 'hello' }],
+        systemPrompt: '',
+        signal: new AbortController().signal,
+        handlers,
+        onRunStatus,
+      });
+
+      await vi.runAllTimersAsync();
+      await run;
+
+      expect(fetchMock).toHaveBeenCalledWith('/api/runs/run-1');
+      expect(onRunStatus).toHaveBeenCalledWith('running');
+      expect(handlers.onError).not.toHaveBeenCalled();
+      expect(handlers.onDone).toHaveBeenCalledWith('');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('reports an error when reconnects are exhausted before an end event', async () => {
     const handlers = createDaemonHandlers();
     const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
