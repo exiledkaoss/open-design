@@ -1,6 +1,19 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveDaemonResourceRoot, resolveProjectRoot } from '../src/server.js';
+import {
+  resolveDaemonPackageRoot,
+  resolveDaemonResourceRoot,
+  resolveProjectRoot,
+} from '../src/server.js';
+
+describe('resolveDaemonPackageRoot', () => {
+  it('resolves the daemon package root from the sidecar compiled server directory', () => {
+    const root = path.resolve(import.meta.dirname, '../../..');
+    const daemonRoot = path.join(root, 'apps', 'daemon');
+
+    expect(resolveDaemonPackageRoot(path.join(daemonRoot, 'dist', 'src'))).toBe(daemonRoot);
+  });
+});
 
 describe('resolveProjectRoot', () => {
   it('resolves the repository root from the source daemon directory', () => {
@@ -19,6 +32,12 @@ describe('resolveProjectRoot', () => {
     const root = path.resolve(import.meta.dirname, '../../..');
 
     expect(resolveProjectRoot(path.join(root, 'apps', 'daemon', 'dist'))).toBe(root);
+  });
+
+  it('resolves the repository root from the sidecar compiled server directory', () => {
+    const root = path.resolve(import.meta.dirname, '../../..');
+
+    expect(resolveProjectRoot(path.join(root, 'apps', 'daemon', 'dist', 'src'))).toBe(root);
   });
 
   it('resolves the repository root from the daemon src directory (tsx entry)', () => {
