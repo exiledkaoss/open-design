@@ -100,14 +100,26 @@ import {
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
-export function resolveProjectRoot(moduleDir: string): string {
-  const base = path.basename(moduleDir);
-  const daemonDir = base === 'dist' || base === 'src'
-    ? path.dirname(moduleDir)
-    : moduleDir;
-  return path.resolve(daemonDir, '../..');
+export function resolveDaemonPackageRoot(moduleDir: string): string {
+  let current = path.resolve(moduleDir);
+  while (['dist', 'sidecar', 'src'].includes(path.basename(current))) {
+    current = path.dirname(current);
+  }
+  return current;
 }
 
+export function resolveProjectRoot(moduleDir: string): string {
+  const daemonPackageRoot = resolveDaemonPackageRoot(moduleDir);
+  if (
+    path.basename(daemonPackageRoot) === 'daemon' &&
+    path.basename(path.dirname(daemonPackageRoot)) === 'apps'
+  ) {
+    return path.resolve(daemonPackageRoot, '../..');
+  }
+  return daemonPackageRoot;
+}
+
+const DAEMON_PACKAGE_ROOT = resolveDaemonPackageRoot(__dirname);
 const PROJECT_ROOT = resolveProjectRoot(__dirname);
 const RESOURCE_ROOT_ENV = 'OD_RESOURCE_ROOT';
 
@@ -159,7 +171,7 @@ const DAEMON_RESOURCE_ROOT = resolveDaemonResourceRoot();
 // when this project shipped with Vite; the daemon serves whatever the
 // frontend toolchain emits, no further config needed.
 const STATIC_DIR = path.join(PROJECT_ROOT, 'apps', 'web', 'out');
-const OD_BIN = path.join(PROJECT_ROOT, 'apps', 'daemon', 'dist', 'cli.js');
+const OD_BIN = path.join(DAEMON_PACKAGE_ROOT, 'dist', 'cli.js');
 const SKILLS_DIR = resolveDaemonResourceDir(
   DAEMON_RESOURCE_ROOT,
   'skills',
