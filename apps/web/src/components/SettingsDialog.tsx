@@ -558,7 +558,9 @@ function MediaProvidersSection({
       const next = { ...prev, ...patch };
       const map = { ...(curr.mediaProviders ?? {}) };
       if (!next.apiKey.trim() && !next.baseUrl.trim()) {
-        delete map[provider.id];
+        // Keep a tombstone so the daemon can distinguish an explicit clear
+        // from an omitted provider that should be preserved on disk.
+        map[provider.id] = { apiKey: '', baseUrl: '' };
       } else {
         map[provider.id] = next;
       }
