@@ -6,6 +6,7 @@ import { AGENT_DEFS } from '../src/agents.js';
 const codex = AGENT_DEFS.find((agent) => agent.id === 'codex');
 const cursorAgent = AGENT_DEFS.find((agent) => agent.id === 'cursor-agent');
 const originalDisablePlugins = process.env.OD_CODEX_DISABLE_PLUGINS;
+const CODEX_NETWORK_CONFIG = 'sandbox_workspace_write.network_access=true';
 
 afterEach(() => {
   if (originalDisablePlugins == null) {
@@ -20,15 +21,38 @@ test('codex args disable plugins when OD_CODEX_DISABLE_PLUGINS is 1', () => {
 
   const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
 
-  assert.deepEqual(args.slice(0, 8), [
+  assert.deepEqual(args.slice(0, 6), [
+    'exec',
+    '--json',
+    '--skip-git-repo-check',
+    '--full-auto',
+    '--disable',
+    'plugins',
+  ]);
+  assert.equal(args.includes(CODEX_NETWORK_CONFIG), false);
+  assert.equal(args.at(-1), '-');
+});
+
+test('codex args keep sandbox network disabled by default', () => {
+  const args = codex.buildArgs('', [], [], {}, { cwd: '/tmp/od-project' });
+
+  assert.equal(args.includes(CODEX_NETWORK_CONFIG), false);
+  assert.equal(args.at(-1), '-');
+});
+
+test('codex args enable sandbox network only when runtime context allows it', () => {
+  const args = codex.buildArgs('', [], [], {}, {
+    cwd: '/tmp/od-project',
+    allowNetworkAccess: true,
+  });
+
+  assert.deepEqual(args.slice(0, 6), [
     'exec',
     '--json',
     '--skip-git-repo-check',
     '--full-auto',
     '-c',
-    'sandbox_workspace_write.network_access=true',
-    '--disable',
-    'plugins',
+    CODEX_NETWORK_CONFIG,
   ]);
   assert.equal(args.at(-1), '-');
 });
