@@ -197,6 +197,7 @@ const promptFileBootstrap = (fp) =>
   'it contains the system prompt, design system, skill workflow, and user request. ' +
   'Do not begin your response until you have read the entire file.';
 export const SSE_KEEPALIVE_INTERVAL_MS = 25_000;
+const MEDIA_PROJECT_KINDS = new Set(['image', 'video', 'audio']);
 
 export function normalizeProjectDisplayStatus(status) {
   return status === 'starting' || status === 'queued' ? 'running' : status;
@@ -210,6 +211,14 @@ export function composeProjectDisplayStatus(baseStatus, awaitingInputProjects, p
     ...baseStatus,
     value: normalizeProjectDisplayStatus(baseStatus.value),
   };
+}
+
+function isMediaProjectMetadata(metadata) {
+  return (
+    metadata &&
+    typeof metadata === 'object' &&
+    MEDIA_PROJECT_KINDS.has(metadata.kind)
+  );
 }
 
 /**
@@ -1658,6 +1667,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     const attachmentHint = safeAttachments.length
       ? `\n\nAttached project files: ${safeAttachments.map((p) => `\`${p}\``).join(', ')}`
       : '';
+    const currentProject =
+      typeof projectId === 'string' && projectId ? getProject(db, projectId) : null;
     const daemonSystemPrompt = await composeDaemonSystemPrompt({ projectId, skillId, designSystemId });
     const instructionPrompt = [daemonSystemPrompt, systemPrompt]
       .map((part) => (typeof part === 'string' ? part.trim() : ''))
@@ -1750,7 +1761,10 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     }
 
     run.promptFileCleaned = cleanPromptFile;
-    const args = def.buildArgs(effectivePrompt, safeImages, extraAllowedDirs, agentOptions, { cwd });
+    const args = def.buildArgs(effectivePrompt, safeImages, extraAllowedDirs, agentOptions, {
+      cwd,
+      allowNetworkAccess: isMediaProjectMetadata(currentProject?.metadata),
+    });
     const send = (event, data) => design.runs.emit(run, event, data);
 
     // resolvedBin was already looked up above for the ENAMETOOLONG check.

@@ -170,9 +170,10 @@ export const AGENT_DEFS = [
         '--json',
         '--skip-git-repo-check',
         '--full-auto',
-        '-c',
-        'sandbox_workspace_write.network_access=true',
       ];
+      if (runtimeContext.allowNetworkAccess === true) {
+        args.push('-c', 'sandbox_workspace_write.network_access=true');
+      }
       if (process.env.OD_CODEX_DISABLE_PLUGINS === '1') {
         args.push('--disable', 'plugins');
       }
