@@ -256,6 +256,7 @@ export function ChatPane({
                       type="button"
                       className="chat-history-new"
                       data-testid="conversation-history-new"
+                      disabled={streaming}
                       onClick={() => {
                         onNewConversation();
                         setShowConvList(false);
@@ -283,6 +284,7 @@ export function ChatPane({
                         }}
                         onDelete={() => onDeleteConversation(c.id)}
                         onRename={onRenameConversation}
+                        disabled={streaming}
                         t={t}
                       />
                     ))
@@ -298,7 +300,7 @@ export function ChatPane({
             title={t('chat.newConversationsTitle')}
             aria-label={t('chat.newConversation')}
             onClick={onNewConversation}
-            disabled={!onNewConversation}
+            disabled={!onNewConversation || streaming}
           >
             <Icon name="plus" size={16} />
           </button>
@@ -419,12 +421,13 @@ function isActiveRunStatus(status: ChatMessage['runStatus']): boolean {
   return status === 'queued' || status === 'running';
 }
 
-function ConversationRow({
+export function ConversationRow({
   conversation,
   active,
   onSelect,
   onDelete,
   onRename,
+  disabled = false,
   t,
 }: {
   conversation: Conversation;
@@ -432,6 +435,7 @@ function ConversationRow({
   onSelect: () => void;
   onDelete: () => void;
   onRename?: (id: string, title: string) => void;
+  disabled?: boolean;
   t: TranslateFn;
 }) {
   const [editing, setEditing] = useState(false);
@@ -448,6 +452,7 @@ function ConversationRow({
           autoFocus
           className="chat-conv-rename-input"
           value={draft}
+          disabled={disabled}
           onChange={(e) => setDraft(e.target.value)}
           onBlur={() => {
             onRename(conversation.id, draft);
@@ -470,8 +475,9 @@ function ConversationRow({
           data-testid={`conversation-select-${conversation.id}`}
           style={{ background: 'transparent', border: 'none', padding: 0, textAlign: 'left' }}
           onClick={onSelect}
+          disabled={disabled}
           onDoubleClick={() => {
-            if (!onRename) return;
+            if (disabled || !onRename) return;
             setDraft(conversation.title ?? '');
             setEditing(true);
           }}
@@ -485,6 +491,7 @@ function ConversationRow({
         className="chat-conv-item-del"
         data-testid={`conversation-delete-${conversation.id}`}
         title={t('chat.deleteConversation')}
+        disabled={disabled}
         onClick={(e) => {
           e.stopPropagation();
           if (
