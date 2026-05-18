@@ -955,18 +955,21 @@ export function ProjectView({
   }, [persistMessage]);
 
   const handleNewConversation = useCallback(async () => {
+    if (streaming) return;
     const fresh = await createConversation(project.id);
     if (!fresh) return;
     setConversations((curr) => [fresh, ...curr]);
     setActiveConversationId(fresh.id);
-  }, [project.id]);
+  }, [project.id, streaming]);
 
   const handleSelectConversation = useCallback((id: string) => {
+    if (streaming) return;
     setActiveConversationId(id);
-  }, []);
+  }, [streaming]);
 
   const handleDeleteConversation = useCallback(
     async (id: string) => {
+      if (streaming) return;
       const ok = await deleteConversationApi(project.id, id);
       if (!ok) return;
       setConversations((curr) => {
@@ -986,7 +989,7 @@ export function ProjectView({
         return next;
       });
     },
-    [project.id, activeConversationId],
+    [project.id, activeConversationId, streaming],
   );
 
   const handleRenameConversation = useCallback(
