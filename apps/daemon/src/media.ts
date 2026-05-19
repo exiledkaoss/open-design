@@ -33,7 +33,7 @@
 // so the CLI can exit non-zero and the agent can't silently narrate the
 // placeholder as the final result.
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -107,9 +107,27 @@ async function resolveProjectImage(rel, projectDir) {
       `--image path "${rel}" resolves outside the project directory.`,
     );
   }
+  let realProjectRoot;
+  let realAbs;
+  try {
+    [realProjectRoot, realAbs] = await Promise.all([
+      realpath(projectRootResolved),
+      realpath(abs),
+    ]);
+  } catch {
+    throw new Error(`--image not found: ${rel}`);
+  }
+  if (
+    realAbs !== realProjectRoot &&
+    !realAbs.startsWith(realProjectRoot + path.sep)
+  ) {
+    throw new Error(
+      `--image path "${rel}" resolves outside the project directory.`,
+    );
+  }
   let info;
   try {
-    info = await stat(abs);
+    info = await stat(realAbs);
   } catch {
     throw new Error(`--image not found: ${rel}`);
   }
@@ -126,8 +144,8 @@ async function resolveProjectImage(rel, projectDir) {
       `--image too large (${info.size} bytes; max ${MAX_IMAGE_BYTES}).`,
     );
   }
-  const bytes = await readFile(abs);
-  const ext = path.extname(abs).toLowerCase();
+  const bytes = await readFile(realAbs);
+  const ext = path.extname(realAbs).toLowerCase();
   // Tight allowlist: only what i2v / image-edit endpoints actually
   // consume. Avoids smuggling arbitrary content through as data URLs.
   const mime = ({
@@ -144,7 +162,7 @@ async function resolveProjectImage(rel, projectDir) {
   }
   return {
     path: rel.trim(),
-    abs,
+    abs: realAbs,
     mime,
     size: bytes.length,
     dataUrl: `data:${mime};base64,${bytes.toString('base64')}`,
@@ -1168,11 +1186,32 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
         'Pass a path relative to the project (e.g. ".hyperframes-cache/abc").',
     );
   }
+  let realProjectRoot;
+  let realCompAbs;
+  try {
+    [realProjectRoot, realCompAbs] = await Promise.all([
+      realpath(projectRootResolved),
+      realpath(compAbs),
+    ]);
+  } catch {
+    throw new Error(
+      `compositionDir not found: ${compRel} (resolved to ${compAbs})`,
+    );
+  }
+  if (
+    realCompAbs !== realProjectRoot &&
+    !realCompAbs.startsWith(realProjectRoot + path.sep)
+  ) {
+    throw new Error(
+      `compositionDir "${compRel}" resolves outside the project directory. ` +
+        'Pass a path relative to the project (e.g. ".hyperframes-cache/abc").',
+    );
+  }
   // Existence check — render against a missing directory hangs HF for
   // a while before failing, so short-circuit with a clear error.
   let compStat;
   try {
-    compStat = await stat(compAbs);
+    compStat = await stat(realCompAbs);
   } catch {
     throw new Error(
       `compositionDir not found: ${compRel} (resolved to ${compAbs})`,
@@ -1181,7 +1220,7 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
   if (!compStat.isDirectory()) {
     throw new Error(`compositionDir is not a directory: ${compRel}`);
   }
-  const indexStat = await stat(path.join(compAbs, 'index.html')).catch(
+  const indexStat = await stat(path.join(realCompAbs, 'index.html')).catch(
     () => null,
   );
   if (!indexStat || !indexStat.isFile()) {
@@ -1199,7 +1238,7 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
     // do NOT pass --quiet so progress lines stream out and the agent
     // (and the user reading the chat in real time) can see frame-by-
     // frame capture status instead of staring at a hung pipe.
-    await runHyperFramesRender(compAbs, tmpOutput, onProgress);
+    await runHyperFramesRender(realCompAbs, tmpOutput, onProgress);
     const bytes = await readFile(tmpOutput);
     return {
       bytes,
