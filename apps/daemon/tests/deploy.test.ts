@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, symlink } from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -134,6 +134,19 @@ describe('deploy file set', () => {
 
     await expect(buildDeployFileSet(projectsRoot, projectId, 'index.html')).rejects.toMatchObject({
       details: { missing: ['missing.png'] },
+    });
+  });
+
+  it('rejects symlinked referenced files instead of deploying files outside the project', async () => {
+    const { projectsRoot, projectId, dir } = await setupProject();
+    const outsideDir = await mkdtemp(path.join(os.tmpdir(), 'od-deploy-secret-'));
+    const outsideFile = path.join(outsideDir, 'vercel-token.txt');
+    await writeFile(outsideFile, 'secret-token');
+    await writeFile(path.join(dir, 'index.html'), '<img src="leak.txt">');
+    await symlink(outsideFile, path.join(dir, 'leak.txt'));
+
+    await expect(buildDeployFileSet(projectsRoot, projectId, 'index.html')).rejects.toMatchObject({
+      details: { invalid: ['leak.txt'] },
     });
   });
 
