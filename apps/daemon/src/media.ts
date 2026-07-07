@@ -33,7 +33,7 @@
 // so the CLI can exit non-zero and the agent can't silently narrate the
 // placeholder as the final result.
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -63,6 +63,30 @@ const DEFAULT_OUTPUT_BY_SURFACE = {
 
 const SURFACES = new Set(['image', 'video', 'audio']);
 const AUDIO_KINDS = new Set(['music', 'speech', 'sfx']);
+
+function isInsidePath(root, candidate) {
+  return candidate === root || candidate.startsWith(root + path.sep);
+}
+
+async function resolveProjectContainedPath(rel, projectDir, label) {
+  const trimmed = rel.trim();
+  const projectRootReal = await realpath(projectDir);
+  const abs = path.resolve(projectRootReal, trimmed);
+  if (!isInsidePath(projectRootReal, abs)) {
+    throw new Error(`${label} "${rel}" resolves outside the project directory.`);
+  }
+
+  let realAbs;
+  try {
+    realAbs = await realpath(abs);
+  } catch {
+    throw new Error(`${label} not found: ${rel}`);
+  }
+  if (!isInsidePath(projectRootReal, realAbs)) {
+    throw new Error(`${label} "${rel}" resolves outside the project directory.`);
+  }
+  return { abs, realAbs, projectRootReal };
+}
 
 // Stubs ship a 1×1 PNG / ~24-byte mp4 / silent WAV / single-frame mp3 so
 // the dispatch path is exercisable before real provider integrations
@@ -97,19 +121,14 @@ function stubsAllowed() {
  */
 async function resolveProjectImage(rel, projectDir) {
   if (typeof rel !== 'string' || !rel.trim()) return null;
-  const projectRootResolved = path.resolve(projectDir);
-  const abs = path.resolve(projectRootResolved, rel.trim());
-  if (
-    abs !== projectRootResolved &&
-    !abs.startsWith(projectRootResolved + path.sep)
-  ) {
-    throw new Error(
-      `--image path "${rel}" resolves outside the project directory.`,
-    );
-  }
+  const { abs, realAbs } = await resolveProjectContainedPath(
+    rel,
+    projectDir,
+    '--image path',
+  );
   let info;
   try {
-    info = await stat(abs);
+    info = await stat(realAbs);
   } catch {
     throw new Error(`--image not found: ${rel}`);
   }
@@ -126,7 +145,7 @@ async function resolveProjectImage(rel, projectDir) {
       `--image too large (${info.size} bytes; max ${MAX_IMAGE_BYTES}).`,
     );
   }
-  const bytes = await readFile(abs);
+  const bytes = await readFile(realAbs);
   const ext = path.extname(abs).toLowerCase();
   // Tight allowlist: only what i2v / image-edit endpoints actually
   // consume. Avoids smuggling arbitrary content through as data URLs.
@@ -1143,9 +1162,8 @@ async function renderFishAudioTTS(ctx, credentials) {
 
 const HYPERFRAMES_RENDER_TIMEOUT_MS = 5 * 60 * 1000;
 
-async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
-  const compRel = ctx.compositionDir;
-  if (typeof compRel !== 'string' || !compRel.trim()) {
+export async function resolveProjectCompositionDirectory(compositionDir, projectDir) {
+  if (typeof compositionDir !== 'string' || !compositionDir.trim()) {
     throw new Error(
       'hyperframes-html requires --composition-dir <project-relative-path> ' +
         'pointing at the directory the agent scaffolded with hyperframes.json / ' +
@@ -1157,17 +1175,11 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
   // escapes — the agent has free file access to the project but the
   // dispatcher must not let a bad relative path render an arbitrary
   // directory on the host.
-  const projectRootResolved = path.resolve(projectDir);
-  const compAbs = path.resolve(projectRootResolved, compRel);
-  if (
-    compAbs !== projectRootResolved &&
-    !compAbs.startsWith(projectRootResolved + path.sep)
-  ) {
-    throw new Error(
-      `compositionDir "${compRel}" resolves outside the project directory. ` +
-        'Pass a path relative to the project (e.g. ".hyperframes-cache/abc").',
-    );
-  }
+  const { realAbs: compAbs } = await resolveProjectContainedPath(
+    compositionDir,
+    projectDir,
+    'compositionDir',
+  );
   // Existence check — render against a missing directory hangs HF for
   // a while before failing, so short-circuit with a clear error.
   let compStat;
@@ -1175,21 +1187,29 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
     compStat = await stat(compAbs);
   } catch {
     throw new Error(
-      `compositionDir not found: ${compRel} (resolved to ${compAbs})`,
+      `compositionDir not found: ${compositionDir} (resolved to ${compAbs})`,
     );
   }
   if (!compStat.isDirectory()) {
-    throw new Error(`compositionDir is not a directory: ${compRel}`);
+    throw new Error(`compositionDir is not a directory: ${compositionDir}`);
   }
   const indexStat = await stat(path.join(compAbs, 'index.html')).catch(
     () => null,
   );
   if (!indexStat || !indexStat.isFile()) {
     throw new Error(
-      `compositionDir is missing index.html: ${compRel}. The agent must ` +
+      `compositionDir is missing index.html: ${compositionDir}. The agent must ` +
         'write index.html (with window.__timelines registration) before dispatch.',
     );
   }
+  return compAbs;
+}
+
+async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
+  const compAbs = await resolveProjectCompositionDirectory(
+    ctx.compositionDir,
+    projectDir,
+  );
 
   const tmpRoot = await mkdtemp(path.join(os.tmpdir(), 'open-design-hf-'));
   const tmpOutput = path.join(tmpRoot, 'render.mp4');
