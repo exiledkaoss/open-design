@@ -5,9 +5,11 @@
 // on-disk content (HTML artifacts, sketches, uploaded images, pasted text).
 //
 // All paths flowing in from HTTP handlers are validated against the project
-// directory to prevent path traversal — see resolveSafe().
+// directory to prevent path traversal — see resolveSafe(). File operations
+// also reject symlinks so project-local links cannot escape after validation.
 
-import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { mkdir, readdir, rm, stat, unlink, lstat, open } from 'node:fs/promises';
 import path from 'node:path';
 import {
   inferLegacyManifest,
@@ -16,6 +18,7 @@ import {
 } from './artifact-manifest.js';
 
 const FORBIDDEN_SEGMENT = /^$|^\.\.?$/;
+const O_NOFOLLOW = typeof constants.O_NOFOLLOW === 'number' ? constants.O_NOFOLLOW : 0;
 
 export function projectDir(projectsRoot, projectId) {
   if (!isSafeId(projectId)) throw new Error('invalid project id');
@@ -73,9 +76,17 @@ async function collectFiles(dir, relDir, out) {
 
 export async function readProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
-  const file = resolveSafe(dir, name);
-  const buf = await readFile(file);
-  const st = await stat(file);
+  const safePath = validateProjectPath(name);
+  const file = resolveSafe(dir, safePath);
+  await assertExistingPathHasNoSymlinks(dir, safePath);
+  const handle = await open(file, constants.O_RDONLY | O_NOFOLLOW);
+  let buf;
+  let st;
+  try {
+    [buf, st] = await Promise.all([handle.readFile(), handle.stat()]);
+  } finally {
+    await handle.close();
+  }
   const rel = toProjectPath(path.relative(dir, file));
   const manifest = await readManifestForPath(dir, rel);
   return {
@@ -101,26 +112,20 @@ export async function writeProjectFile(
   const dir = await ensureProject(projectsRoot, projectId);
   const safeName = sanitizePath(name);
   const target = resolveSafe(dir, safeName);
-  if (!overwrite) {
-    try {
-      await stat(target);
-      throw new Error('file already exists');
-    } catch (err) {
-      if (!err || err.code !== 'ENOENT') throw err;
-    }
-  }
-  await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, body);
+  await ensureSafeParentDir(dir, safeName);
+  await writeFileNoFollow(target, body, { overwrite });
   if (artifactManifest && typeof artifactManifest === 'object') {
     const manifestFileName = artifactManifestNameFor(safeName);
     const manifestTarget = resolveSafe(dir, manifestFileName);
     const validated = validateArtifactManifestInput(artifactManifest, safeName);
     if (validated.ok && validated.value) {
       const nextManifest = validated.value;
-      await writeFile(manifestTarget, JSON.stringify(nextManifest, null, 2));
+      await writeFileNoFollow(manifestTarget, JSON.stringify(nextManifest, null, 2), {
+        overwrite: true,
+      });
     }
   }
-  const st = await stat(target);
+  const st = await lstat(target);
   const persistedManifest = await readManifestForPath(dir, safeName);
   return {
     name: safeName,
@@ -139,9 +144,17 @@ function artifactManifestNameFor(name) {
 }
 
 async function readManifestForPath(projectDirPath, relPath) {
-  const manifestPath = path.join(projectDirPath, artifactManifestNameFor(relPath));
+  const manifestRelPath = artifactManifestNameFor(relPath);
+  const manifestPath = resolveSafe(projectDirPath, manifestRelPath);
   try {
-    const raw = await readFile(manifestPath, 'utf8');
+    await assertExistingPathHasNoSymlinks(projectDirPath, manifestRelPath);
+    const handle = await open(manifestPath, constants.O_RDONLY | O_NOFOLLOW);
+    let raw;
+    try {
+      raw = await handle.readFile('utf8');
+    } finally {
+      await handle.close();
+    }
     const parsed = parseManifest(raw);
     if (parsed) return parsed;
   } catch (err) {
@@ -158,7 +171,9 @@ function parseManifest(raw) {
 
 export async function deleteProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
-  const file = resolveSafe(dir, name);
+  const safePath = validateProjectPath(name);
+  const file = resolveSafe(dir, safePath);
+  await assertParentPathHasNoSymlinks(dir, safePath);
   await unlink(file);
 }
 
@@ -174,6 +189,68 @@ function resolveSafe(dir, name) {
     throw new Error('path escapes project dir');
   }
   return target;
+}
+
+async function writeFileNoFollow(target, body, { overwrite }) {
+  try {
+    const existing = await lstat(target);
+    if (existing.isSymbolicLink()) throw new Error('project file path resolves through a symlink');
+  } catch (err) {
+    if (!err || err.code !== 'ENOENT') throw err;
+  }
+  const flags =
+    constants.O_WRONLY |
+    constants.O_CREAT |
+    O_NOFOLLOW |
+    (overwrite ? constants.O_TRUNC : constants.O_EXCL);
+  const handle = await open(target, flags, 0o666);
+  try {
+    await handle.writeFile(body);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function ensureSafeParentDir(dir, relPath) {
+  const safePath = validateProjectPath(relPath);
+  const parts = safePath.split('/').slice(0, -1);
+  let current = dir;
+  for (const part of parts) {
+    current = path.join(current, part);
+    try {
+      const st = await lstat(current);
+      if (st.isSymbolicLink() || !st.isDirectory()) {
+        throw new Error('project file path resolves through a symlink');
+      }
+    } catch (err) {
+      if (!err || err.code !== 'ENOENT') throw err;
+      await mkdir(current);
+    }
+  }
+}
+
+async function assertExistingPathHasNoSymlinks(dir, relPath) {
+  await assertPathHasNoSymlinks(dir, validateProjectPath(relPath), { includeLeaf: true });
+}
+
+async function assertParentPathHasNoSymlinks(dir, relPath) {
+  await assertPathHasNoSymlinks(dir, validateProjectPath(relPath), { includeLeaf: false });
+}
+
+async function assertPathHasNoSymlinks(dir, relPath, { includeLeaf }) {
+  const parts = relPath.split('/');
+  const limit = includeLeaf ? parts.length : parts.length - 1;
+  let current = dir;
+  for (let i = 0; i < limit; i += 1) {
+    current = path.join(current, parts[i]);
+    const st = await lstat(current);
+    if (st.isSymbolicLink()) {
+      throw new Error('project file path resolves through a symlink');
+    }
+    if (i < parts.length - 1 && !st.isDirectory()) {
+      throw new Error('invalid project file path');
+    }
+  }
 }
 
 export function sanitizePath(raw) {
