@@ -558,7 +558,7 @@ function MediaProvidersSection({
       const next = { ...prev, ...patch };
       const map = { ...(curr.mediaProviders ?? {}) };
       if (!next.apiKey.trim() && !next.baseUrl.trim()) {
-        delete map[provider.id];
+        map[provider.id] = { apiKey: '', baseUrl: '' };
       } else {
         map[provider.id] = next;
       }
