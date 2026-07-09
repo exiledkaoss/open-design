@@ -1,6 +1,10 @@
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { resolveDaemonResourceRoot, resolveProjectRoot } from '../src/server.js';
+import {
+  applyProjectFileResponseHeaders,
+  resolveDaemonResourceRoot,
+  resolveProjectRoot,
+} from '../src/server.js';
 
 describe('resolveProjectRoot', () => {
   it('resolves the repository root from the source daemon directory', () => {
@@ -49,5 +53,22 @@ describe('resolveDaemonResourceRoot', () => {
     expect(() => resolveDaemonResourceRoot({ configured, safeBases: [safeBase] })).toThrow(
       /OD_RESOURCE_ROOT must be under/,
     );
+  });
+});
+
+describe('project file response headers', () => {
+  it('sandboxes SVG project files opened from the app origin', () => {
+    const headers = new Map<string, string>();
+    const res = {
+      setHeader(name: string, value: string) {
+        headers.set(name.toLowerCase(), value);
+      },
+    };
+
+    applyProjectFileResponseHeaders(res, { mime: 'image/svg+xml' });
+
+    expect(headers.get('x-content-type-options')).toBe('nosniff');
+    expect(headers.get('content-security-policy')).toContain('sandbox');
+    expect(headers.get('content-security-policy')).toContain("default-src 'none'");
   });
 });

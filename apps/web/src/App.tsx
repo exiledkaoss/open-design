@@ -129,7 +129,7 @@ export function App() {
     // configuration, so future page loads can skip the auto-popup.
     const withOnboarding: AppConfig = { ...next, onboardingCompleted: true };
     saveConfig(withOnboarding);
-    void syncMediaProvidersToDaemon(withOnboarding.mediaProviders, { force: true });
+    void syncMediaProvidersToDaemon(withOnboarding.mediaProviders);
     setConfig(withOnboarding);
     setSettingsOpen(false);
   }, []);
