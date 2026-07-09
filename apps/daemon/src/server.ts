@@ -243,6 +243,16 @@ function sendApiError(res, status, code, message, init = {}) {
   return res.status(status).json(createCompatApiErrorResponse(code, message, init));
 }
 
+export function applyProjectFileResponseHeaders(res, file) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (String(file?.mime || '').toLowerCase().startsWith('image/svg+xml')) {
+    res.setHeader(
+      'Content-Security-Policy',
+      "sandbox; default-src 'none'; img-src data: blob:; style-src 'unsafe-inline'",
+    );
+  }
+}
+
 /**
  * @param {ApiErrorCode} code
  * @param {string} message
@@ -1186,6 +1196,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     try {
       const relPath = req.params[0];
       const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath);
+      applyProjectFileResponseHeaders(res, file);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
@@ -1219,6 +1230,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   app.get('/api/projects/:id/files/:name', async (req, res) => {
     try {
       const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name);
+      applyProjectFileResponseHeaders(res, file);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;

@@ -33,7 +33,7 @@
 // so the CLI can exit non-zero and the agent can't silently narrate the
 // placeholder as the final result.
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,9 +48,8 @@ import {
 import { resolveProviderConfig } from './media-config.js';
 import {
   ensureProject,
-  kindFor,
-  mimeFor,
   sanitizeName,
+  writeProjectFile,
 } from './projects.js';
 
 const execFile = promisify(execFileCb);
@@ -97,8 +96,22 @@ function stubsAllowed() {
  */
 async function resolveProjectImage(rel, projectDir) {
   if (typeof rel !== 'string' || !rel.trim()) return null;
-  const projectRootResolved = path.resolve(projectDir);
-  const abs = path.resolve(projectRootResolved, rel.trim());
+  const projectRootResolved = await realpath(projectDir);
+  const requested = path.resolve(projectRootResolved, rel.trim());
+  if (
+    requested !== projectRootResolved &&
+    !requested.startsWith(projectRootResolved + path.sep)
+  ) {
+    throw new Error(
+      `--image path "${rel}" resolves outside the project directory.`,
+    );
+  }
+  let abs;
+  try {
+    abs = await realpath(requested);
+  } catch {
+    throw new Error(`--image not found: ${rel}`);
+  }
   if (
     abs !== projectRootResolved &&
     !abs.startsWith(projectRootResolved + path.sep)
@@ -279,8 +292,6 @@ export async function generateMedia(args) {
   const safeOut = sanitizeName(
     output || autoOutputName(surface, model, resolvedAudioKind),
   );
-  const target = path.join(dir, safeOut);
-  await mkdir(path.dirname(target), { recursive: true });
 
   // Reference image for image-to-video / image-edit flows. The agent
   // passes a project-relative path; we read it once here, validate it
@@ -438,15 +449,13 @@ export async function generateMedia(args) {
     const stem = dot > 0 ? safeOut.slice(0, dot) : safeOut;
     finalOut = `${stem}${suggestedExt}`;
   }
-  const finalTarget = path.join(dir, finalOut);
-  await writeFile(finalTarget, bytes);
-  const st = await stat(finalTarget);
+  const saved = await writeProjectFile(projectsRoot, projectId, finalOut, bytes);
   return {
-    name: finalOut,
-    size: st.size,
-    mtime: st.mtimeMs,
-    kind: kindFor(finalOut),
-    mime: mimeFor(finalOut),
+    name: saved.name,
+    size: saved.size,
+    mtime: saved.mtime,
+    kind: saved.kind,
+    mime: saved.mime,
     model,
     surface,
     providerNote,
@@ -1157,8 +1166,25 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
   // escapes — the agent has free file access to the project but the
   // dispatcher must not let a bad relative path render an arbitrary
   // directory on the host.
-  const projectRootResolved = path.resolve(projectDir);
-  const compAbs = path.resolve(projectRootResolved, compRel);
+  const projectRootResolved = await realpath(projectDir);
+  const requestedCompAbs = path.resolve(projectRootResolved, compRel);
+  if (
+    requestedCompAbs !== projectRootResolved &&
+    !requestedCompAbs.startsWith(projectRootResolved + path.sep)
+  ) {
+    throw new Error(
+      `compositionDir "${compRel}" resolves outside the project directory. ` +
+        'Pass a path relative to the project (e.g. ".hyperframes-cache/abc").',
+    );
+  }
+  let compAbs;
+  try {
+    compAbs = await realpath(requestedCompAbs);
+  } catch {
+    throw new Error(
+      `compositionDir not found: ${compRel} (resolved to ${requestedCompAbs})`,
+    );
+  }
   if (
     compAbs !== projectRootResolved &&
     !compAbs.startsWith(projectRootResolved + path.sep)
