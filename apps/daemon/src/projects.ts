@@ -7,7 +7,8 @@
 // All paths flowing in from HTTP handlers are validated against the project
 // directory to prevent path traversal — see resolveSafe().
 
-import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants as fsConstants } from 'node:fs';
+import { lstat, mkdir, open, readdir, rm, stat, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import {
   inferLegacyManifest,
@@ -16,6 +17,7 @@ import {
 } from './artifact-manifest.js';
 
 const FORBIDDEN_SEGMENT = /^$|^\.\.?$/;
+const O_NOFOLLOW = fsConstants.O_NOFOLLOW ?? 0;
 
 export function projectDir(projectsRoot, projectId) {
   if (!isSafeId(projectId)) throw new Error('invalid project id');
@@ -73,10 +75,9 @@ async function collectFiles(dir, relDir, out) {
 
 export async function readProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
-  const file = resolveSafe(dir, name);
-  const buf = await readFile(file);
-  const st = await stat(file);
-  const rel = toProjectPath(path.relative(dir, file));
+  const { target: file, safePath } = resolveSafe(dir, name);
+  const { buffer: buf, stats: st } = await readFileNoFollow(dir, safePath, file);
+  const rel = safePath;
   const manifest = await readManifestForPath(dir, rel);
   return {
     buffer: buf,
@@ -100,7 +101,7 @@ export async function writeProjectFile(
 ) {
   const dir = await ensureProject(projectsRoot, projectId);
   const safeName = sanitizePath(name);
-  const target = resolveSafe(dir, safeName);
+  const { target } = resolveSafe(dir, safeName);
   if (!overwrite) {
     try {
       await stat(target);
@@ -109,15 +110,19 @@ export async function writeProjectFile(
       if (!err || err.code !== 'ENOENT') throw err;
     }
   }
-  await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, body);
+  await writeFileNoFollow(dir, safeName, target, body);
   if (artifactManifest && typeof artifactManifest === 'object') {
     const manifestFileName = artifactManifestNameFor(safeName);
-    const manifestTarget = resolveSafe(dir, manifestFileName);
+    const { target: manifestTarget, safePath: manifestSafePath } = resolveSafe(dir, manifestFileName);
     const validated = validateArtifactManifestInput(artifactManifest, safeName);
     if (validated.ok && validated.value) {
       const nextManifest = validated.value;
-      await writeFile(manifestTarget, JSON.stringify(nextManifest, null, 2));
+      await writeFileNoFollow(
+        dir,
+        manifestSafePath,
+        manifestTarget,
+        JSON.stringify(nextManifest, null, 2),
+      );
     }
   }
   const st = await stat(target);
@@ -139,9 +144,10 @@ function artifactManifestNameFor(name) {
 }
 
 async function readManifestForPath(projectDirPath, relPath) {
-  const manifestPath = path.join(projectDirPath, artifactManifestNameFor(relPath));
+  const { target: manifestPath, safePath } = resolveSafe(projectDirPath, artifactManifestNameFor(relPath));
   try {
-    const raw = await readFile(manifestPath, 'utf8');
+    const { buffer } = await readFileNoFollow(projectDirPath, safePath, manifestPath);
+    const raw = buffer.toString('utf8');
     const parsed = parseManifest(raw);
     if (parsed) return parsed;
   } catch (err) {
@@ -158,7 +164,9 @@ function parseManifest(raw) {
 
 export async function deleteProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
-  const file = resolveSafe(dir, name);
+  const { target: file, safePath } = resolveSafe(dir, name);
+  await assertNoSymlinkParents(dir, safePath);
+  await assertFinalNotSymlink(file);
   await unlink(file);
 }
 
@@ -173,7 +181,69 @@ function resolveSafe(dir, name) {
   if (!target.startsWith(dir + path.sep) && target !== dir) {
     throw new Error('path escapes project dir');
   }
-  return target;
+  return { target, safePath };
+}
+
+async function readFileNoFollow(dir, safePath, target) {
+  await assertNoSymlinkParents(dir, safePath);
+  await assertFinalNotSymlink(target);
+  const fh = await open(target, fsConstants.O_RDONLY | O_NOFOLLOW);
+  try {
+    const buffer = await fh.readFile();
+    const stats = await fh.stat();
+    if (!stats.isFile()) throw new Error('not a regular file');
+    return { buffer, stats };
+  } finally {
+    await fh.close();
+  }
+}
+
+async function writeFileNoFollow(dir, safePath, target, body) {
+  await mkdir(path.dirname(target), { recursive: true });
+  await assertNoSymlinkParents(dir, safePath);
+  await assertFinalNotSymlink(target);
+  const fh = await open(
+    target,
+    fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | O_NOFOLLOW,
+  );
+  try {
+    await fh.writeFile(body);
+  } finally {
+    await fh.close();
+  }
+}
+
+async function assertNoSymlinkParents(dir, safePath) {
+  const parentParts = safePath.split('/').slice(0, -1);
+  let current = dir;
+  for (const part of parentParts) {
+    current = path.join(current, part);
+    let entry;
+    try {
+      entry = await lstat(current);
+    } catch (err) {
+      if (err && err.code === 'ENOENT') return;
+      throw err;
+    }
+    if (entry.isSymbolicLink()) {
+      throw new Error('path includes symlink');
+    }
+    if (!entry.isDirectory()) {
+      throw new Error('path parent is not a directory');
+    }
+  }
+}
+
+async function assertFinalNotSymlink(target) {
+  try {
+    const entry = await lstat(target);
+    if (entry.isSymbolicLink()) {
+      throw new Error('path resolves through symlink');
+    }
+  } catch (err) {
+    if (err && err.code === 'ENOENT') return;
+    throw err;
+  }
 }
 
 export function sanitizePath(raw) {
@@ -228,10 +298,6 @@ export function decodeMultipartFilename(name) {
   const buf = Buffer.from(name, 'latin1');
   const utf8 = buf.toString('utf8');
   return Buffer.from(utf8, 'utf8').equals(buf) ? utf8 : name;
-}
-
-function toProjectPath(raw) {
-  return raw.split(path.sep).join('/');
 }
 
 function isSafeId(id) {

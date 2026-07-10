@@ -12,6 +12,7 @@ import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
 const SUPPORTED_SURFACES = ['image', 'video'];
+const SAFE_TEMPLATE_ID = /^[A-Za-z0-9._-]{1,180}$/;
 
 export async function listPromptTemplates(root) {
   const out = [];
@@ -52,6 +53,7 @@ export async function listPromptTemplates(root) {
 
 export async function readPromptTemplate(root, surface, id) {
   if (!SUPPORTED_SURFACES.includes(surface)) return null;
+  if (typeof id !== 'string' || !SAFE_TEMPLATE_ID.test(id)) return null;
   const filePath = path.join(root, surface, `${id}.json`);
   try {
     const raw = await readFile(filePath, 'utf8');

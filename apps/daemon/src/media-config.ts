@@ -13,7 +13,7 @@
 // We DO mask keys when reading via the GET endpoint so the UI doesn't
 // echo secrets back into the DOM.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { MEDIA_PROVIDERS } from './media-models.js';
 
@@ -66,7 +66,11 @@ async function readStored(projectRoot) {
 async function writeStored(projectRoot, providers) {
   const file = configFile(projectRoot);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ providers }, null, 2), 'utf8');
+  await writeFile(file, JSON.stringify({ providers }, null, 2), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
+  await chmod(file, 0o600).catch(() => {});
 }
 
 function readEnvKey(providerId) {
@@ -119,56 +123,35 @@ export async function readMaskedConfig(projectRoot) {
 }
 
 /**
- * Write the supplied {providerId: {apiKey, baseUrl}} map. Empty
- * apiKey deletes the entry. Unknown provider IDs are ignored. We
- * deliberately replace the whole map rather than merging so the
- * UI's "clear key" affordance just sends an empty string.
- *
- * Safety: if the incoming payload is empty but the on-disk config
- * currently has providers, we log a WARN to stderr. This catches
- * accidental wipes (e.g. a fresh-localStorage browser bootstrap
- * pushing `{providers: {}}` onto a daemon that had keys from a
- * previous session) without silently destroying the user's data.
+ * Patch the supplied {providerId: {apiKey, baseUrl}} map into the
+ * stored credentials. Omitted providers and omitted fields are
+ * preserved; explicit blank fields clear that field. This matches the
+ * web UI's partial localStorage snapshots without letting a stale
+ * browser profile erase credentials configured elsewhere.
  */
 export async function writeConfig(projectRoot, body) {
   const incoming = body && typeof body === 'object' ? body.providers || {} : {};
-  const force = Boolean(body && typeof body === 'object' && body.force === true);
-  const next = {};
+  const prior = await readStored(projectRoot);
+  const next = { ...prior };
   for (const id of PROVIDER_IDS) {
+    if (!Object.prototype.hasOwnProperty.call(incoming, id)) continue;
     const entry = incoming[id];
     if (!entry || typeof entry !== 'object') continue;
-    const apiKey =
-      typeof entry.apiKey === 'string' && entry.apiKey.trim()
-        ? entry.apiKey.trim()
-        : '';
-    const baseUrl =
-      typeof entry.baseUrl === 'string' && entry.baseUrl.trim()
-        ? entry.baseUrl.trim()
-        : '';
-    if (!apiKey && !baseUrl) continue;
-    next[id] = { apiKey, baseUrl };
-  }
-  if (Object.keys(next).length === 0) {
-    const prior = await readStored(projectRoot);
-    const priorIds = Object.keys(prior).filter(
-      (id) => prior[id] && (prior[id].apiKey || prior[id].baseUrl),
-    );
-    if (priorIds.length > 0) {
-      if (!force) {
-        const err = new Error(
-          `refusing to wipe ${priorIds.length} configured provider(s) without force=true: ${priorIds.join(', ')}`,
-        );
-        err.status = 409;
-        throw err;
-      }
-      try {
-        console.error(
-          `[media-config] WARN: incoming PUT empty, would wipe ${priorIds.length} configured provider(s): ${priorIds.join(', ')}`,
-        );
-      } catch {
-        // best-effort logging only
-      }
+
+    const patched = { ...(next[id] || {}) };
+    if (Object.prototype.hasOwnProperty.call(entry, 'apiKey')) {
+      const apiKey = typeof entry.apiKey === 'string' ? entry.apiKey.trim() : '';
+      if (apiKey) patched.apiKey = apiKey;
+      else delete patched.apiKey;
     }
+    if (Object.prototype.hasOwnProperty.call(entry, 'baseUrl')) {
+      const baseUrl = typeof entry.baseUrl === 'string' ? entry.baseUrl.trim() : '';
+      if (baseUrl) patched.baseUrl = baseUrl;
+      else delete patched.baseUrl;
+    }
+
+    if (patched.apiKey || patched.baseUrl) next[id] = patched;
+    else delete next[id];
   }
   await writeStored(projectRoot, next);
   return readMaskedConfig(projectRoot);
