@@ -33,7 +33,7 @@
 // so the CLI can exit non-zero and the agent can't silently narrate the
 // placeholder as the final result.
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, realpath, rm, stat } from 'node:fs/promises';
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -51,6 +51,7 @@ import {
   kindFor,
   mimeFor,
   sanitizeName,
+  writeProjectFile,
 } from './projects.js';
 
 const execFile = promisify(execFileCb);
@@ -107,9 +108,22 @@ async function resolveProjectImage(rel, projectDir) {
       `--image path "${rel}" resolves outside the project directory.`,
     );
   }
+  let containedAbs;
+  try {
+    containedAbs = await resolveContainedRealpath(
+      projectRootResolved,
+      abs,
+      `--image path "${rel}" resolves outside the project directory.`,
+    );
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(`--image not found: ${rel}`);
+    }
+    throw err;
+  }
   let info;
   try {
-    info = await stat(abs);
+    info = await stat(containedAbs);
   } catch {
     throw new Error(`--image not found: ${rel}`);
   }
@@ -126,7 +140,7 @@ async function resolveProjectImage(rel, projectDir) {
       `--image too large (${info.size} bytes; max ${MAX_IMAGE_BYTES}).`,
     );
   }
-  const bytes = await readFile(abs);
+  const bytes = await readFile(containedAbs);
   const ext = path.extname(abs).toLowerCase();
   // Tight allowlist: only what i2v / image-edit endpoints actually
   // consume. Avoids smuggling arbitrary content through as data URLs.
@@ -144,11 +158,19 @@ async function resolveProjectImage(rel, projectDir) {
   }
   return {
     path: rel.trim(),
-    abs,
+    abs: containedAbs,
     mime,
     size: bytes.length,
     dataUrl: `data:${mime};base64,${bytes.toString('base64')}`,
   };
+}
+
+async function resolveContainedRealpath(root, target, errorMessage) {
+  const [rootReal, targetReal] = await Promise.all([realpath(root), realpath(target)]);
+  if (targetReal !== rootReal && !targetReal.startsWith(rootReal + path.sep)) {
+    throw new Error(errorMessage);
+  }
+  return targetReal;
 }
 
 function clampNumber(value, allowed) {
@@ -279,8 +301,6 @@ export async function generateMedia(args) {
   const safeOut = sanitizeName(
     output || autoOutputName(surface, model, resolvedAudioKind),
   );
-  const target = path.join(dir, safeOut);
-  await mkdir(path.dirname(target), { recursive: true });
 
   // Reference image for image-to-video / image-edit flows. The agent
   // passes a project-relative path; we read it once here, validate it
@@ -438,15 +458,13 @@ export async function generateMedia(args) {
     const stem = dot > 0 ? safeOut.slice(0, dot) : safeOut;
     finalOut = `${stem}${suggestedExt}`;
   }
-  const finalTarget = path.join(dir, finalOut);
-  await writeFile(finalTarget, bytes);
-  const st = await stat(finalTarget);
+  const meta = await writeProjectFile(projectsRoot, projectId, finalOut, bytes);
   return {
-    name: finalOut,
-    size: st.size,
-    mtime: st.mtimeMs,
-    kind: kindFor(finalOut),
-    mime: mimeFor(finalOut),
+    name: meta.name,
+    size: meta.size,
+    mtime: meta.mtime,
+    kind: kindFor(meta.name),
+    mime: mimeFor(meta.name),
     model,
     surface,
     providerNote,
@@ -1168,11 +1186,26 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
         'Pass a path relative to the project (e.g. ".hyperframes-cache/abc").',
     );
   }
+  let containedCompAbs;
+  try {
+    containedCompAbs = await resolveContainedRealpath(
+      projectRootResolved,
+      compAbs,
+      `compositionDir "${compRel}" resolves outside the project directory.`,
+    );
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(
+        `compositionDir not found: ${compRel} (resolved to ${compAbs})`,
+      );
+    }
+    throw err;
+  }
   // Existence check — render against a missing directory hangs HF for
   // a while before failing, so short-circuit with a clear error.
   let compStat;
   try {
-    compStat = await stat(compAbs);
+    compStat = await stat(containedCompAbs);
   } catch {
     throw new Error(
       `compositionDir not found: ${compRel} (resolved to ${compAbs})`,
@@ -1181,9 +1214,16 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
   if (!compStat.isDirectory()) {
     throw new Error(`compositionDir is not a directory: ${compRel}`);
   }
-  const indexStat = await stat(path.join(compAbs, 'index.html')).catch(
-    () => null,
-  );
+  const indexPath = path.join(containedCompAbs, 'index.html');
+  const indexReal = await resolveContainedRealpath(
+    projectRootResolved,
+    indexPath,
+    `compositionDir "${compRel}" contains an index.html outside the project directory.`,
+  ).catch((err) => {
+    if (err && err.code === 'ENOENT') return null;
+    throw err;
+  });
+  const indexStat = indexReal ? await stat(indexReal).catch(() => null) : null;
   if (!indexStat || !indexStat.isFile()) {
     throw new Error(
       `compositionDir is missing index.html: ${compRel}. The agent must ` +
@@ -1199,7 +1239,7 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
     // do NOT pass --quiet so progress lines stream out and the agent
     // (and the user reading the chat in real time) can see frame-by-
     // frame capture status instead of staring at a hung pipe.
-    await runHyperFramesRender(compAbs, tmpOutput, onProgress);
+    await runHyperFramesRender(containedCompAbs, tmpOutput, onProgress);
     const bytes = await readFile(tmpOutput);
     return {
       bytes,

@@ -7,6 +7,8 @@
 import { readdir, readFile, stat } from 'node:fs/promises';
 import path from 'node:path';
 
+const SAFE_DESIGN_SYSTEM_ID = /^[A-Za-z0-9._-]{1,180}$/;
+
 export async function listDesignSystems(root) {
   const out = [];
   let entries = [];
@@ -41,6 +43,7 @@ export async function listDesignSystems(root) {
 }
 
 export async function readDesignSystem(root, id) {
+  if (typeof id !== 'string' || !SAFE_DESIGN_SYSTEM_ID.test(id)) return null;
   const file = path.join(root, id, 'DESIGN.md');
   try {
     return await readFile(file, 'utf8');
