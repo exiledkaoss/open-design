@@ -33,7 +33,7 @@
 // so the CLI can exit non-zero and the agent can't silently narrate the
 // placeholder as the final result.
 
-import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from 'node:fs/promises';
+import { mkdtemp, readFile, rm } from 'node:fs/promises';
 import { execFile as execFileCb, spawn } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -48,9 +48,9 @@ import {
 import { resolveProviderConfig } from './media-config.js';
 import {
   ensureProject,
-  kindFor,
-  mimeFor,
+  resolveProjectPath,
   sanitizeName,
+  writeProjectFile,
 } from './projects.js';
 
 const execFile = promisify(execFileCb);
@@ -97,25 +97,19 @@ function stubsAllowed() {
  */
 async function resolveProjectImage(rel, projectDir) {
   if (typeof rel !== 'string' || !rel.trim()) return null;
-  const projectRootResolved = path.resolve(projectDir);
-  const abs = path.resolve(projectRootResolved, rel.trim());
-  if (
-    abs !== projectRootResolved &&
-    !abs.startsWith(projectRootResolved + path.sep)
-  ) {
+  let resolved;
+  try {
+    resolved = await resolveProjectPath(projectDir, rel.trim(), { type: 'file' });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(`--image not found: ${rel}`);
+    }
     throw new Error(
-      `--image path "${rel}" resolves outside the project directory.`,
+      `--image path "${rel}" is not a safe project file: ${err?.message || String(err)}`,
     );
   }
-  let info;
-  try {
-    info = await stat(abs);
-  } catch {
-    throw new Error(`--image not found: ${rel}`);
-  }
-  if (!info.isFile()) {
-    throw new Error(`--image is not a regular file: ${rel}`);
-  }
+  const abs = resolved.target;
+  const info = resolved.stat;
   // Cap at 16 MB. Beyond this, base64 inflation alone (≈4/3) starts
   // hitting body-size limits at the upstream APIs and our own express
   // 4mb body cap on inbound requests; bigger payloads should travel
@@ -143,7 +137,7 @@ async function resolveProjectImage(rel, projectDir) {
     );
   }
   return {
-    path: rel.trim(),
+    path: resolved.safePath,
     abs,
     mime,
     size: bytes.length,
@@ -279,8 +273,6 @@ export async function generateMedia(args) {
   const safeOut = sanitizeName(
     output || autoOutputName(surface, model, resolvedAudioKind),
   );
-  const target = path.join(dir, safeOut);
-  await mkdir(path.dirname(target), { recursive: true });
 
   // Reference image for image-to-video / image-edit flows. The agent
   // passes a project-relative path; we read it once here, validate it
@@ -438,15 +430,13 @@ export async function generateMedia(args) {
     const stem = dot > 0 ? safeOut.slice(0, dot) : safeOut;
     finalOut = `${stem}${suggestedExt}`;
   }
-  const finalTarget = path.join(dir, finalOut);
-  await writeFile(finalTarget, bytes);
-  const st = await stat(finalTarget);
+  const meta = await writeProjectFile(projectsRoot, projectId, finalOut, bytes);
   return {
-    name: finalOut,
-    size: st.size,
-    mtime: st.mtimeMs,
-    kind: kindFor(finalOut),
-    mime: mimeFor(finalOut),
+    name: meta.name,
+    size: meta.size,
+    mtime: meta.mtime,
+    kind: meta.kind,
+    mime: meta.mime,
     model,
     surface,
     providerNote,
@@ -1153,41 +1143,37 @@ async function renderHyperFramesViaCli(ctx, projectDir, onProgress) {
         '$OD_PROJECT_DIR/.hyperframes-cache/<id>/ and pass that path here.',
     );
   }
-  // Resolve compositionDir against projectDir and refuse anything that
-  // escapes — the agent has free file access to the project but the
-  // dispatcher must not let a bad relative path render an arbitrary
-  // directory on the host.
-  const projectRootResolved = path.resolve(projectDir);
-  const compAbs = path.resolve(projectRootResolved, compRel);
-  if (
-    compAbs !== projectRootResolved &&
-    !compAbs.startsWith(projectRootResolved + path.sep)
-  ) {
-    throw new Error(
-      `compositionDir "${compRel}" resolves outside the project directory. ` +
-        'Pass a path relative to the project (e.g. ".hyperframes-cache/abc").',
-    );
-  }
-  // Existence check — render against a missing directory hangs HF for
-  // a while before failing, so short-circuit with a clear error.
-  let compStat;
+  // Resolve compositionDir against projectDir and refuse symlinks or paths
+  // that escape. The daemon runs outside the agent sandbox, so the renderer
+  // must never follow project symlinks into arbitrary host directories.
+  let composition;
   try {
-    compStat = await stat(compAbs);
-  } catch {
+    composition = await resolveProjectPath(projectDir, compRel, {
+      type: 'directory',
+    });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(
+        `compositionDir not found: ${compRel}`,
+      );
+    }
     throw new Error(
-      `compositionDir not found: ${compRel} (resolved to ${compAbs})`,
+      `compositionDir "${compRel}" is not a safe project directory: ${err?.message || String(err)}`,
     );
   }
-  if (!compStat.isDirectory()) {
-    throw new Error(`compositionDir is not a directory: ${compRel}`);
-  }
-  const indexStat = await stat(path.join(compAbs, 'index.html')).catch(
-    () => null,
-  );
-  if (!indexStat || !indexStat.isFile()) {
+  const compAbs = composition.target;
+  const indexRel = path.posix.join(composition.safePath, 'index.html');
+  try {
+    await resolveProjectPath(projectDir, indexRel, { type: 'file' });
+  } catch (err) {
+    if (err && err.code === 'ENOENT') {
+      throw new Error(
+        `compositionDir is missing index.html: ${compRel}. The agent must ` +
+          'write index.html (with window.__timelines registration) before dispatch.',
+      );
+    }
     throw new Error(
-      `compositionDir is missing index.html: ${compRel}. The agent must ` +
-        'write index.html (with window.__timelines registration) before dispatch.',
+      `compositionDir index.html is not a safe project file: ${err?.message || String(err)}`,
     );
   }
 

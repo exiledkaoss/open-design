@@ -1,4 +1,4 @@
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, writeFile, mkdir, symlink } from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
@@ -134,6 +134,19 @@ describe('deploy file set', () => {
 
     await expect(buildDeployFileSet(projectsRoot, projectId, 'index.html')).rejects.toMatchObject({
       details: { missing: ['missing.png'] },
+    });
+  });
+
+  it('rejects referenced assets that are project-local symlinks', async () => {
+    const { projectsRoot, projectId, dir } = await setupProject();
+    const secretPath = path.join(path.dirname(dir), 'media-config.json');
+    await mkdir(path.join(dir, 'assets'));
+    await writeFile(secretPath, '{"apiKey":"real"}');
+    await writeFile(path.join(dir, 'index.html'), '<img src="assets/leak.png">');
+    await symlink(secretPath, path.join(dir, 'assets', 'leak.png'));
+
+    await expect(buildDeployFileSet(projectsRoot, projectId, 'index.html')).rejects.toMatchObject({
+      details: { invalid: ['assets/leak.png'] },
     });
   });
 

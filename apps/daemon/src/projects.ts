@@ -7,7 +7,8 @@
 // All paths flowing in from HTTP handlers are validated against the project
 // directory to prevent path traversal — see resolveSafe().
 
-import { mkdir, readdir, readFile, rm, stat, unlink, writeFile } from 'node:fs/promises';
+import { constants } from 'node:fs';
+import { lstat, mkdir, open, readdir, readFile, rm, unlink } from 'node:fs/promises';
 import path from 'node:path';
 import {
   inferLegacyManifest,
@@ -55,7 +56,7 @@ async function collectFiles(dir, relDir, out) {
     }
     if (!e.isFile()) continue;
     if (e.name.endsWith('.artifact.json')) continue;
-    const st = await stat(full);
+    const st = await lstat(full);
     const manifest = await readManifestForPath(dir, rel);
     out.push({
       name: rel,
@@ -73,10 +74,10 @@ async function collectFiles(dir, relDir, out) {
 
 export async function readProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
-  const file = resolveSafe(dir, name);
-  const buf = await readFile(file);
-  const st = await stat(file);
-  const rel = toProjectPath(path.relative(dir, file));
+  const { target: file, safePath: rel } = await resolveProjectPath(dir, name, {
+    type: 'file',
+  });
+  const { buffer: buf, stat: st } = await readFileNoFollow(file);
   const manifest = await readManifestForPath(dir, rel);
   return {
     buffer: buf,
@@ -103,24 +104,26 @@ export async function writeProjectFile(
   const target = resolveSafe(dir, safeName);
   if (!overwrite) {
     try {
-      await stat(target);
+      await resolveProjectPath(dir, safeName, { type: 'file' });
       throw new Error('file already exists');
     } catch (err) {
       if (!err || err.code !== 'ENOENT') throw err;
     }
   }
-  await mkdir(path.dirname(target), { recursive: true });
-  await writeFile(target, body);
+  await writeProjectFileNoFollow(dir, safeName, body);
   if (artifactManifest && typeof artifactManifest === 'object') {
     const manifestFileName = artifactManifestNameFor(safeName);
-    const manifestTarget = resolveSafe(dir, manifestFileName);
     const validated = validateArtifactManifestInput(artifactManifest, safeName);
     if (validated.ok && validated.value) {
       const nextManifest = validated.value;
-      await writeFile(manifestTarget, JSON.stringify(nextManifest, null, 2));
+      await writeProjectFileNoFollow(
+        dir,
+        manifestFileName,
+        JSON.stringify(nextManifest, null, 2),
+      );
     }
   }
-  const st = await stat(target);
+  const st = await lstat(target);
   const persistedManifest = await readManifestForPath(dir, safeName);
   return {
     name: safeName,
@@ -139,8 +142,12 @@ function artifactManifestNameFor(name) {
 }
 
 async function readManifestForPath(projectDirPath, relPath) {
-  const manifestPath = path.join(projectDirPath, artifactManifestNameFor(relPath));
   try {
+    const { target: manifestPath } = await resolveProjectPath(
+      projectDirPath,
+      artifactManifestNameFor(relPath),
+      { type: 'file' },
+    );
     const raw = await readFile(manifestPath, 'utf8');
     const parsed = parseManifest(raw);
     if (parsed) return parsed;
@@ -158,7 +165,7 @@ function parseManifest(raw) {
 
 export async function deleteProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
-  const file = resolveSafe(dir, name);
+  const { target: file } = await resolveProjectPath(dir, name, { type: 'file' });
   await unlink(file);
 }
 
@@ -174,6 +181,101 @@ function resolveSafe(dir, name) {
     throw new Error('path escapes project dir');
   }
   return target;
+}
+
+export async function resolveProjectPath(dir, name, { type = 'any', allowMissing = false } = {}) {
+  const safePath = validateProjectPath(name);
+  const target = resolveSafe(dir, safePath);
+  const st = await lstatProjectPath(dir, safePath, { allowMissing });
+  if (!st) return { target, safePath, stat: null };
+  if (type === 'file' && !st.isFile()) {
+    throw new Error(`project path is not a regular file: ${safePath}`);
+  }
+  if (type === 'directory' && !st.isDirectory()) {
+    throw new Error(`project path is not a directory: ${safePath}`);
+  }
+  return { target, safePath, stat: st };
+}
+
+async function lstatProjectPath(dir, safePath, { allowMissing = false } = {}) {
+  let current = dir;
+  const parts = safePath.split('/');
+  for (let i = 0; i < parts.length; i += 1) {
+    current = path.join(current, parts[i]);
+    let st;
+    try {
+      st = await lstat(current);
+    } catch (err) {
+      if (allowMissing && i === parts.length - 1 && err && err.code === 'ENOENT') {
+        return null;
+      }
+      throw err;
+    }
+    if (st.isSymbolicLink()) {
+      throw new Error(`symlinks are not allowed in project paths: ${safePath}`);
+    }
+    if (i < parts.length - 1 && !st.isDirectory()) {
+      throw new Error(`project path parent is not a directory: ${safePath}`);
+    }
+    if (i === parts.length - 1) return st;
+  }
+  return null;
+}
+
+async function ensureProjectParentDirectory(dir, safeName) {
+  const parentRel = path.posix.dirname(safeName);
+  if (!parentRel || parentRel === '.') return;
+  const safeParent = validateProjectPath(parentRel);
+  let current = dir;
+  for (const segment of safeParent.split('/')) {
+    current = path.join(current, segment);
+    try {
+      await mkdir(current);
+    } catch (err) {
+      if (!err || err.code !== 'EEXIST') throw err;
+    }
+    const st = await lstat(current);
+    if (st.isSymbolicLink()) {
+      throw new Error(`symlinks are not allowed in project paths: ${safeName}`);
+    }
+    if (!st.isDirectory()) {
+      throw new Error(`project path parent is not a directory: ${safeName}`);
+    }
+  }
+}
+
+async function writeProjectFileNoFollow(dir, safeName, body) {
+  const target = resolveSafe(dir, safeName);
+  await ensureProjectParentDirectory(dir, safeName);
+  await resolveProjectPath(dir, safeName, { allowMissing: true });
+  const flags =
+    constants.O_WRONLY |
+    constants.O_CREAT |
+    constants.O_TRUNC |
+    (constants.O_NOFOLLOW || 0);
+  const handle = await open(target, flags, 0o666);
+  try {
+    await handle.writeFile(body);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function readFileNoFollow(file) {
+  const flags = constants.O_RDONLY | (constants.O_NOFOLLOW || 0);
+  const handle = await open(file, flags);
+  try {
+    const st = await handle.stat();
+    if (!st.isFile()) {
+      throw new Error('project path is not a regular file');
+    }
+    return {
+      buffer: await handle.readFile(),
+      stat: st,
+    };
+  } finally {
+    await handle.close();
+  }
 }
 
 export function sanitizePath(raw) {
