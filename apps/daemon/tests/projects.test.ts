@@ -15,7 +15,7 @@ async function setupProject() {
   const projectId = 'p1';
   const dir = await ensureProject(projectsRoot, projectId);
   return { root, projectsRoot, projectId, dir };
-});
+}
 
 describe('project file symlink containment', () => {
   it('rejects reads through project-local symlinks', async () => {
@@ -40,4 +40,4 @@ describe('project file symlink containment', () => {
     ).rejects.toThrow(/symlinks are not allowed/);
     await expect(readFile(secretPath, 'utf8')).resolves.toBe('{"apiKey":"real"}');
   });
-}
+});
