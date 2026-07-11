@@ -12,7 +12,7 @@ async function setupProject() {
   const projectId = 'p1';
   const dir = await ensureProject(projectsRoot, projectId);
   return { root, projectsRoot, projectId, dir };
-}
+});
 
 describe('media project path containment', () => {
   const originalStubFlag = process.env.OD_MEDIA_ALLOW_STUBS;

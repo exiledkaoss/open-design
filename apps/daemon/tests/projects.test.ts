@@ -15,7 +15,7 @@ async function setupProject() {
   const projectId = 'p1';
   const dir = await ensureProject(projectsRoot, projectId);
   return { root, projectsRoot, projectId, dir };
-}
+});
 
 describe('project file symlink containment', () => {
   it('rejects reads through project-local symlinks', async () => {
