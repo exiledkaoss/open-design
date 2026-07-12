@@ -557,11 +557,9 @@ function MediaProvidersSection({
       const prev = curr.mediaProviders?.[provider.id] ?? { apiKey: '', baseUrl: '' };
       const next = { ...prev, ...patch };
       const map = { ...(curr.mediaProviders ?? {}) };
-      if (!next.apiKey.trim() && !next.baseUrl.trim()) {
-        delete map[provider.id];
-      } else {
-        map[provider.id] = next;
-      }
+      // Blank entries are intentional tombstones: the daemon treats omitted
+      // providers as "preserve existing" and explicit blanks as "clear it".
+      map[provider.id] = next;
       return { ...curr, mediaProviders: map };
     });
   };
