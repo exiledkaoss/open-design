@@ -86,8 +86,9 @@ describe('media provider config', () => {
     });
 
     const masked = await readMaskedConfig(root);
-    expect(masked.providers.openai.configured).toBe(false);
-    expect(masked.providers.volcengine.configured).toBe(true);
+    const providers = masked.providers as Record<string, { configured: boolean }>;
+    expect(providers.openai?.configured).toBe(false);
+    expect(providers.volcengine?.configured).toBe(true);
   });
 
   it('stores provider credentials in an owner-only file', async () => {
