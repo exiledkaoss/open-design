@@ -84,7 +84,7 @@ export async function readProjectFile(projectsRoot, projectId, name) {
   const dir = projectDir(projectsRoot, projectId);
   const file = resolveSafe(dir, name);
   await assertNoSymlinkPath(dir, file);
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await openNoFollow(file, constants.O_RDONLY);
   let buf;
   let st;
   try {
@@ -239,7 +239,7 @@ async function assertNoSymlinkPath(rootDir, target) {
 }
 
 async function readFileNoFollow(file, encoding) {
-  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW);
+  const handle = await openNoFollow(file, constants.O_RDONLY);
   try {
     return encoding ? await handle.readFile({ encoding }) : await handle.readFile();
   } finally {
@@ -248,15 +248,26 @@ async function readFileNoFollow(file, encoding) {
 }
 
 async function writeFileNoFollow(file, body) {
-  const handle = await open(
+  const handle = await openNoFollow(
     file,
-    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW,
+    constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC,
     0o644,
   );
   try {
     await handle.writeFile(body);
   } finally {
     await handle.close();
+  }
+}
+
+async function openNoFollow(file, flags, mode) {
+  try {
+    return await open(file, flags | constants.O_NOFOLLOW, mode);
+  } catch (err) {
+    if (err && err.code === 'ELOOP') {
+      throw new Error('path contains symlink');
+    }
+    throw err;
   }
 }
 
