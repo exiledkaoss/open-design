@@ -66,7 +66,10 @@ async function readStored(projectRoot) {
 async function writeStored(projectRoot, providers) {
   const file = configFile(projectRoot);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ providers }, null, 2), 'utf8');
+  await writeFile(file, JSON.stringify({ providers }, null, 2), {
+    encoding: 'utf8',
+    mode: 0o600,
+  });
 }
 
 function readEnvKey(providerId) {
@@ -119,21 +122,14 @@ export async function readMaskedConfig(projectRoot) {
 }
 
 /**
- * Write the supplied {providerId: {apiKey, baseUrl}} map. Empty
- * apiKey deletes the entry. Unknown provider IDs are ignored. We
- * deliberately replace the whole map rather than merging so the
- * UI's "clear key" affordance just sends an empty string.
- *
- * Safety: if the incoming payload is empty but the on-disk config
- * currently has providers, we log a WARN to stderr. This catches
- * accidental wipes (e.g. a fresh-localStorage browser bootstrap
- * pushing `{providers: {}}` onto a daemon that had keys from a
- * previous session) without silently destroying the user's data.
+ * Patch the supplied {providerId: {apiKey, baseUrl}} map into the stored
+ * config. Omitted providers are preserved so a browser-local subset cannot
+ * wipe credentials that only exist on disk. Supplying a known provider with
+ * both fields empty is the explicit delete signal used by the Settings UI.
  */
 export async function writeConfig(projectRoot, body) {
   const incoming = body && typeof body === 'object' ? body.providers || {} : {};
-  const force = Boolean(body && typeof body === 'object' && body.force === true);
-  const next = {};
+  const next = { ...(await readStored(projectRoot)) };
   for (const id of PROVIDER_IDS) {
     const entry = incoming[id];
     if (!entry || typeof entry !== 'object') continue;
@@ -145,30 +141,11 @@ export async function writeConfig(projectRoot, body) {
       typeof entry.baseUrl === 'string' && entry.baseUrl.trim()
         ? entry.baseUrl.trim()
         : '';
-    if (!apiKey && !baseUrl) continue;
-    next[id] = { apiKey, baseUrl };
-  }
-  if (Object.keys(next).length === 0) {
-    const prior = await readStored(projectRoot);
-    const priorIds = Object.keys(prior).filter(
-      (id) => prior[id] && (prior[id].apiKey || prior[id].baseUrl),
-    );
-    if (priorIds.length > 0) {
-      if (!force) {
-        const err = new Error(
-          `refusing to wipe ${priorIds.length} configured provider(s) without force=true: ${priorIds.join(', ')}`,
-        );
-        err.status = 409;
-        throw err;
-      }
-      try {
-        console.error(
-          `[media-config] WARN: incoming PUT empty, would wipe ${priorIds.length} configured provider(s): ${priorIds.join(', ')}`,
-        );
-      } catch {
-        // best-effort logging only
-      }
+    if (!apiKey && !baseUrl) {
+      delete next[id];
+      continue;
     }
+    next[id] = { apiKey, baseUrl };
   }
   await writeStored(projectRoot, next);
   return readMaskedConfig(projectRoot);
