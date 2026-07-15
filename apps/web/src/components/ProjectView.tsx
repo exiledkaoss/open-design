@@ -50,6 +50,7 @@ import { AvatarMenu } from './AvatarMenu';
 import { ChatPane } from './ChatPane';
 import { FileWorkspace } from './FileWorkspace';
 import { Icon } from './Icon';
+import { detachRunSubscriptions } from './run-subscriptions';
 
 interface Props {
   project: Project;
@@ -186,14 +187,14 @@ export function ProjectView({
 
   useEffect(() => {
     return () => {
-      for (const controller of reattachControllersRef.current.values()) {
-        controller.abort();
-      }
-      for (const controller of reattachCancelControllersRef.current.values()) {
-        controller.abort();
-      }
-      reattachControllersRef.current.clear();
-      reattachCancelControllersRef.current.clear();
+      detachRunSubscriptions({
+        activeStream: abortRef.current,
+        streamControllers: reattachControllersRef.current,
+        cancelControllers: reattachCancelControllersRef.current,
+      });
+      abortRef.current = null;
+      cancelRef.current = null;
+      setStreaming(false);
     };
   }, [project.id, activeConversationId]);
 
