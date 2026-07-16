@@ -212,6 +212,16 @@ export function composeProjectDisplayStatus(baseStatus, awaitingInputProjects, p
   };
 }
 
+export function setProjectFileResponseHeaders(res, mime) {
+  res.setHeader('X-Content-Type-Options', 'nosniff');
+  if (mime === 'image/svg+xml' || mime === 'text/html') {
+    res.setHeader(
+      'Content-Security-Policy',
+      "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+    );
+  }
+}
+
 /**
  * @param {ApiErrorCode} code
  * @param {string} message
@@ -1186,6 +1196,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     try {
       const relPath = req.params[0];
       const file = await readProjectFile(PROJECTS_DIR, req.params.id, relPath);
+      setProjectFileResponseHeaders(res, file.mime);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
@@ -1219,6 +1230,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   app.get('/api/projects/:id/files/:name', async (req, res) => {
     try {
       const file = await readProjectFile(PROJECTS_DIR, req.params.id, req.params.name);
+      setProjectFileResponseHeaders(res, file.mime);
       res.type(file.mime).send(file.buffer);
     } catch (err) {
       const status = err && err.code === 'ENOENT' ? 404 : 400;
