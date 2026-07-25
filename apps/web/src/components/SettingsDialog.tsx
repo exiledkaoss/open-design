@@ -558,7 +558,10 @@ function MediaProvidersSection({
       const next = { ...prev, ...patch };
       const map = { ...(curr.mediaProviders ?? {}) };
       if (!next.apiKey.trim() && !next.baseUrl.trim()) {
-        delete map[provider.id];
+        // Keep an explicit blank tombstone so daemon provider-level patch
+        // writes can delete this provider; omitting the key would preserve
+        // any credentials that only exist on disk.
+        map[provider.id] = { apiKey: '', baseUrl: '' };
       } else {
         map[provider.id] = next;
       }
