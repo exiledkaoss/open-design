@@ -2,7 +2,11 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { createCompatApiErrorResponse, createSseResponse } from '../src/server.js';
+import {
+  createCompatApiErrorResponse,
+  createSseResponse,
+  setProjectFileResponseHeaders,
+} from '../src/server.js';
 
 afterEach(() => {
   vi.useRealTimers();
@@ -92,6 +96,33 @@ describe('createCompatApiErrorResponse', () => {
         retryable: true,
         details: { legacyCode: 'ENOENT' },
       },
+    });
+  });
+});
+
+describe('setProjectFileResponseHeaders', () => {
+  it.each(['image/svg+xml', 'text/html', 'text/html; charset=utf-8'])(
+    'sandboxes active project content served as %s',
+    (mime) => {
+      const res = new FakeResponse();
+
+      setProjectFileResponseHeaders(res, mime);
+
+      expect(res.headers).toEqual({
+        'Content-Security-Policy':
+          "sandbox; default-src 'none'; img-src data:; style-src 'unsafe-inline'",
+        'X-Content-Type-Options': 'nosniff',
+      });
+    },
+  );
+
+  it('prevents content sniffing without sandboxing inert project content', () => {
+    const res = new FakeResponse();
+
+    setProjectFileResponseHeaders(res, 'image/png');
+
+    expect(res.headers).toEqual({
+      'X-Content-Type-Options': 'nosniff',
     });
   });
 });
