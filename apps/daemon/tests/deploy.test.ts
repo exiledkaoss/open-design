@@ -137,6 +137,20 @@ describe('deploy file set', () => {
     });
   });
 
+  it('rejects referenced index.html that would overwrite the deploy entry', async () => {
+    const { projectsRoot, projectId, dir } = await setupProject();
+    await mkdir(path.join(dir, 'sub'), { recursive: true });
+    await writeFile(
+      path.join(dir, 'sub', 'page.html'),
+      '<!doctype html><iframe src="/index.html"></iframe>',
+    );
+    await writeFile(path.join(dir, 'index.html'), '<!doctype html><p>root</p>');
+
+    await expect(buildDeployFileSet(projectsRoot, projectId, 'sub/page.html')).rejects.toMatchObject({
+      details: { conflict: ['index.html'], entryPath: 'sub/page.html' },
+    });
+  });
+
   it('does not treat navigation hrefs as deploy dependencies', async () => {
     const { projectsRoot, projectId, dir } = await setupProject();
     await writeFile(
