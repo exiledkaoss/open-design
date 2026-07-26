@@ -41,6 +41,11 @@ import {
 } from './media-models.js';
 import { readMaskedConfig, writeConfig } from './media-config.js';
 import {
+  assertSafeProxyBaseUrl,
+  buildProxyChatCompletionsUrl,
+  ProxyUrlError,
+} from './proxy-url.js';
+import {
   decodeMultipartFilename,
   deleteProjectFile,
   ensureProject,
@@ -1970,33 +1975,18 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     // Validate baseUrl — only allow http/https and block internal IPs (SSRF).
     let parsed;
     try {
-      parsed = new URL(baseUrl.replace(/\/+$/, ''));
-    } catch {
+      parsed = await assertSafeProxyBaseUrl(baseUrl);
+    } catch (err) {
+      if (err instanceof ProxyUrlError) {
+        return sendApiError(res, err.status, err.code, err.message);
+      }
       return sendApiError(res, 400, 'BAD_REQUEST', 'Invalid baseUrl');
-    }
-    if (!['http:', 'https:'].includes(parsed.protocol)) {
-      return sendApiError(res, 400, 'BAD_REQUEST', 'Only http/https allowed');
-    }
-    if (
-      ['localhost', '127.0.0.1', '::1'].includes(parsed.hostname) ||
-      parsed.hostname.startsWith('169.254.') ||
-      parsed.hostname.startsWith('10.') ||
-      /^192\.168\./.test(parsed.hostname) ||
-      /^172\.(1[6-9]|2\d|3[01])\./.test(parsed.hostname)
-    ) {
-      return sendApiError(res, 400, 'FORBIDDEN', 'Internal IPs blocked');
     }
 
     // Build the upstream URL. If the base URL already ends with /v1 (or
     // /v1/), append /chat/completions directly. Otherwise append
     // /v1/chat/completions for providers that expect a versioned prefix.
-    let url;
-    const clean = baseUrl.replace(/\/+$/, '');
-    if (/\/v\d+$/.test(clean)) {
-      url = clean + '/chat/completions';
-    } else {
-      url = clean + '/v1/chat/completions';
-    }
+    const url = buildProxyChatCompletionsUrl(baseUrl);
 
     // Force MiMo to behave as a pure text generator (no tool calls)
     const isMiMo = model.toLowerCase().startsWith('mimo');
@@ -2019,6 +2009,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
     let upstream;
     try {
+      // Never follow redirects: Location could point at loopback / metadata
+      // after the original host passed validation.
       upstream = await fetch(url, {
         method: 'POST',
         headers: {
@@ -2026,9 +2018,20 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
           Authorization: `Bearer ${apiKey}`,
         },
         body,
+        redirect: 'manual',
       });
     } catch (fetchErr) {
       send('error', createSseErrorPayload('UPSTREAM_UNAVAILABLE', `fetch failed: ${fetchErr.message}`, { retryable: true }));
+      return sse.end();
+    }
+
+    if (upstream.status >= 300 && upstream.status < 400) {
+      send(
+        'error',
+        createSseErrorPayload('UPSTREAM_UNAVAILABLE', `upstream redirect ${upstream.status} blocked`, {
+          retryable: false,
+        }),
+      );
       return sse.end();
     }
 

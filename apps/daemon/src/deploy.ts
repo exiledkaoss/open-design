@@ -123,6 +123,19 @@ export async function buildDeployFileSet(projectsRoot, projectId, entryName, opt
     if (safePath === entryPath || visited.has(safePath)) continue;
     visited.add(safePath);
 
+    // The selected entry is always published as deploy-root index.html.
+    // Collecting a project file that also maps to that key would silently
+    // replace the entry (e.g. deploy sub/page.html that references
+    // /index.html via <iframe src="/index.html">).
+    if (files.has(safePath)) {
+      const existing = files.get(safePath);
+      throw new DeployError(
+        `Referenced file "${safePath}" conflicts with deploy entry "${existing.sourcePath}" which is published as ${safePath}.`,
+        400,
+        { conflict: [safePath], entryPath: existing.sourcePath },
+      );
+    }
+
     let projectFile;
     try {
       projectFile = await readProjectFile(projectsRoot, projectId, safePath);
