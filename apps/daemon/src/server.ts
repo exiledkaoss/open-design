@@ -454,9 +454,16 @@ export function createSseResponse(res, { keepAliveIntervalMs = SSE_KEEPALIVE_INT
   };
 }
 
+// Chat messages persist the full assistant transcript (content + tool
+// events). Long agent turns and HTML artifacts with inline assets routinely
+// exceed a few megabytes; a 4mb cap rejected those PUTs with 413 while the
+// web client treated any HTTP response as success, silently dropping the
+// in-memory reply on reload. Keep this high enough for real transcripts.
+export const JSON_BODY_LIMIT = '32mb';
+
 export async function startServer({ port = 7456, returnServer = false } = {}) {
   const app = express();
-  app.use(express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: JSON_BODY_LIMIT }));
   const db = openDatabase(PROJECT_ROOT, { dataDir: RUNTIME_DATA_DIR });
 
   if (process.env.OD_CODEX_DISABLE_PLUGINS === '1') {

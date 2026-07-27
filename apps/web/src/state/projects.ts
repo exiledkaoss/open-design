@@ -259,17 +259,26 @@ export async function saveMessage(
   conversationId: string,
   message: ChatMessage,
 ): Promise<void> {
-  try {
-    await fetch(
-      `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(message.id)}`,
-      {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(message),
-      },
+  const resp = await fetch(
+    `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(message.id)}`,
+    {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(message),
+    },
+  );
+  if (!resp.ok) {
+    let detail = '';
+    try {
+      detail = (await resp.text()).trim();
+    } catch {
+      // ignore body read failures; status alone is enough to surface
+    }
+    throw new Error(
+      detail
+        ? `Failed to save message (${resp.status}): ${detail}`
+        : `Failed to save message (${resp.status})`,
     );
-  } catch {
-    // best-effort persistence — UI keeps the message in-memory either way
   }
 }
 

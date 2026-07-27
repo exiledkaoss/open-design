@@ -351,12 +351,17 @@ export function ProjectView({
     designSystems,
   ]);
 
+  const reportPersistError = useCallback((err: unknown) => {
+    const message = err instanceof Error ? err.message : String(err);
+    setError(message);
+  }, []);
+
   const persistMessage = useCallback(
     (m: ChatMessage) => {
       if (!activeConversationId) return;
-      void saveMessage(project.id, activeConversationId, m);
+      void saveMessage(project.id, activeConversationId, m).catch(reportPersistError);
     },
-    [project.id, activeConversationId],
+    [project.id, activeConversationId, reportPersistError],
   );
 
   const persistMessageById = useCallback(
@@ -364,11 +369,13 @@ export function ProjectView({
       if (!activeConversationId) return;
       setMessages((curr) => {
         const found = curr.find((m) => m.id === messageId);
-        if (found) void saveMessage(project.id, activeConversationId, found);
+        if (found) {
+          void saveMessage(project.id, activeConversationId, found).catch(reportPersistError);
+        }
         return curr;
       });
     },
-    [project.id, activeConversationId],
+    [project.id, activeConversationId, reportPersistError],
   );
 
   const updateMessageById = useCallback(
@@ -382,12 +389,12 @@ export function ProjectView({
           return updated;
         });
         if (persist && saved && activeConversationId) {
-          void saveMessage(project.id, activeConversationId, saved);
+          void saveMessage(project.id, activeConversationId, saved).catch(reportPersistError);
         }
         return next;
       });
     },
-    [project.id, activeConversationId],
+    [project.id, activeConversationId, reportPersistError],
   );
 
   useEffect(() => {
