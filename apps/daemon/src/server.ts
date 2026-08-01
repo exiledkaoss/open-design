@@ -49,6 +49,7 @@ import {
   readProjectFile,
   removeProjectDir,
   sanitizeName,
+  uniqueStoredUploadName,
   writeProjectFile,
 } from './projects.js';
 import { validateArtifactManifestInput } from './artifact-manifest.js';
@@ -297,12 +298,11 @@ const projectUpload = multer({
     filename: (_req, file, cb) => {
       // multer@1 hands us latin1-decoded multipart filenames; restore the
       // original UTF-8 so the response (and the on-disk name) preserves
-      // non-ASCII characters instead of mangling them. Then run the
-      // shared sanitiser and prepend a base36 timestamp so multiple
-      // uploads with the same original name don't clobber each other.
+      // non-ASCII characters instead of mangling them. Then stamp with
+      // timestamp + entropy so same-name files in one paste/drop batch
+      // (often same millisecond) don't overwrite each other on disk.
       file.originalname = decodeMultipartFilename(file.originalname);
-      const safe = sanitizeName(file.originalname);
-      cb(null, `${Date.now().toString(36)}-${safe}`);
+      cb(null, uniqueStoredUploadName(file.originalname));
     },
   }),
   limits: { fileSize: 20 * 1024 * 1024 },
