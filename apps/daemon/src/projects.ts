@@ -212,6 +212,18 @@ export function sanitizeName(raw) {
   return cleaned || `file-${Date.now()}`;
 }
 
+// Project uploads land flat in the project folder. A timestamp alone is not
+// enough: paste/drop batches often share a basename (e.g. image.png) and
+// multer can invoke the filename callback twice in the same millisecond,
+// which would otherwise overwrite the first file on disk.
+export function uniqueStoredUploadName(
+  originalName,
+  { now = Date.now(), entropy = Math.random().toString(36).slice(2, 8) } = {},
+) {
+  const safe = sanitizeName(decodeMultipartFilename(originalName));
+  return `${Number(now).toString(36)}-${entropy}-${safe}`;
+}
+
 // multer@1 decodes multipart filenames as latin1, which mangles any
 // UTF-8 bytes (Chinese, Japanese, Cyrillic, ...) the user uploads. Re-
 // decode as UTF-8 when the result round-trips back to the original

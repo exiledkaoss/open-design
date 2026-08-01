@@ -1,5 +1,9 @@
 import { describe, expect, it } from 'vitest';
-import { decodeMultipartFilename, sanitizeName } from '../src/projects.js';
+import {
+  decodeMultipartFilename,
+  sanitizeName,
+  uniqueStoredUploadName,
+} from '../src/projects.js';
 
 describe('sanitizeName', () => {
   it('keeps ASCII letters, digits, dot, dash, underscore as-is', () => {
@@ -32,6 +36,38 @@ describe('sanitizeName', () => {
   it('falls back to a generated name when the input is empty after cleanup', () => {
     const out = sanitizeName('');
     expect(out).toMatch(/^file-\d+$/);
+  });
+});
+
+describe('uniqueStoredUploadName', () => {
+  it('keeps same-millisecond same-basename uploads distinct', () => {
+    const now = 1_700_000_000_000;
+    const first = uniqueStoredUploadName('image.png', { now, entropy: 'aaaaaa' });
+    const second = uniqueStoredUploadName('image.png', { now, entropy: 'bbbbbb' });
+
+    expect(first).toBe(`${now.toString(36)}-aaaaaa-image.png`);
+    expect(second).toBe(`${now.toString(36)}-bbbbbb-image.png`);
+    expect(first).not.toBe(second);
+  });
+
+  it('still distinguishes names that sanitize to the same basename', () => {
+    const now = 1_700_000_000_123;
+    const first = uniqueStoredUploadName('a/b.png', { now, entropy: 'cccccc' });
+    const second = uniqueStoredUploadName('a_b.png', { now, entropy: 'dddddd' });
+
+    expect(first).toBe(`${now.toString(36)}-cccccc-a_b.png`);
+    expect(second).toBe(`${now.toString(36)}-dddddd-a_b.png`);
+    expect(first).not.toBe(second);
+  });
+
+  it('restores multer latin1-mangled UTF-8 names before stamping', () => {
+    const utf8 = '测试图片.png';
+    const latin1 = Buffer.from(utf8, 'utf8').toString('latin1');
+    const now = 1_700_000_000_456;
+
+    expect(uniqueStoredUploadName(latin1, { now, entropy: 'eeeeee' })).toBe(
+      `${now.toString(36)}-eeeeee-测试图片.png`,
+    );
   });
 });
 
