@@ -52,6 +52,7 @@ import {
   mimeFor,
   sanitizeName,
 } from './projects.js';
+import { fetchOutboundUrlBytes, UnsafeUrlError } from './safe-url.js';
 
 const execFile = promisify(execFileCb);
 
@@ -556,10 +557,12 @@ async function renderOpenAIImage(ctx, credentials) {
   if (entry.b64_json) {
     bytes = Buffer.from(entry.b64_json, 'base64');
   } else if (entry.url) {
-    const imgResp = await fetch(entry.url);
-    if (!imgResp.ok) throw new Error(`openai image fetch ${imgResp.status}`);
-    const arr = await imgResp.arrayBuffer();
-    bytes = Buffer.from(arr);
+    try {
+      bytes = await fetchOutboundUrlBytes(entry.url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) throw err;
+      throw new Error(`openai image fetch failed: ${err && err.message ? err.message : err}`);
+    }
   } else {
     throw new Error('openai response had neither b64_json nor url');
   }
@@ -873,10 +876,13 @@ async function renderVolcengineVideo(ctx, credentials, onProgress) {
     throw new Error(`volcengine task did not finish in time (last status: ${lastStatus || 'unknown'})`);
   }
 
-  const dlResp = await fetch(videoUrl);
-  if (!dlResp.ok) throw new Error(`volcengine video fetch ${dlResp.status}`);
-  const arr = await dlResp.arrayBuffer();
-  const bytes = Buffer.from(arr);
+  let bytes;
+  try {
+    bytes = await fetchOutboundUrlBytes(videoUrl);
+  } catch (err) {
+    if (err instanceof UnsafeUrlError) throw err;
+    throw new Error(`volcengine video fetch failed: ${err && err.message ? err.message : err}`);
+  }
 
   return {
     bytes,
@@ -933,9 +939,12 @@ async function renderVolcengineImage(ctx, credentials) {
   if (entry.b64_json) {
     bytes = Buffer.from(entry.b64_json, 'base64');
   } else if (entry.url) {
-    const imgResp = await fetch(entry.url);
-    if (!imgResp.ok) throw new Error(`volcengine image fetch ${imgResp.status}`);
-    bytes = Buffer.from(await imgResp.arrayBuffer());
+    try {
+      bytes = await fetchOutboundUrlBytes(entry.url);
+    } catch (err) {
+      if (err instanceof UnsafeUrlError) throw err;
+      throw new Error(`volcengine image fetch failed: ${err && err.message ? err.message : err}`);
+    }
   } else {
     throw new Error('volcengine image response missing b64_json/url');
   }
