@@ -77,6 +77,7 @@ import {
   updateConversation,
   updateProject,
   upsertDeployment,
+  updateDeploymentLinkStatus,
   upsertMessage,
 } from './db.js';
 import {
@@ -1145,16 +1146,25 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       }
       const result = await checkDeploymentUrl(existing.url);
       const now = Date.now();
+      // Only patch status fields, and only if url is unchanged. A redeploy
+      // during checkDeploymentUrl must not revert url/deploymentId via the
+      // stale pre-await snapshot previously spread into upsertDeployment.
       /** @type {import('@open-design/contracts').CheckDeploymentLinkResponse} */
-      const body = upsertDeployment(db, {
-        ...existing,
-        status: result.reachable ? 'ready' : (result.status || 'link-delayed'),
-        statusMessage: result.reachable
-          ? 'Public link is ready.'
-          : (result.statusMessage || 'Vercel is still preparing the public link.'),
-        reachableAt: result.reachable ? now : existing.reachableAt,
-        updatedAt: now,
-      });
+      const body =
+        updateDeploymentLinkStatus(db, {
+          projectId: req.params.id,
+          id: existing.id,
+          expectedUrl: existing.url,
+          status: result.reachable ? 'ready' : (result.status || 'link-delayed'),
+          statusMessage: result.reachable
+            ? 'Public link is ready.'
+            : (result.statusMessage || 'Vercel is still preparing the public link.'),
+          reachableAt: result.reachable ? now : null,
+          updatedAt: now,
+        }) || getDeploymentById(db, req.params.id, req.params.deploymentId);
+      if (!body) {
+        return sendApiError(res, 404, 'FILE_NOT_FOUND', 'deployment not found');
+      }
       res.json(body);
     } catch (err) {
       sendApiError(res, 400, 'BAD_REQUEST', String(err?.message || err));
