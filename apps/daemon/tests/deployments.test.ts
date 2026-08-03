@@ -114,11 +114,8 @@ test('stale check-link cannot revert url after concurrent redeploy', () => {
   });
   assert.equal(stale, null);
 
-  const current = upsertDeployment(db, {
-    ...redeployed,
-    // no-op identity upsert to re-read through the same helper surface
-    updatedAt: redeployed.updatedAt,
-  });
+  const current = getDeploymentById(db, prior.projectId, prior.id);
+  assert.ok(current);
   assert.equal(current.url, 'https://new.example.vercel.app');
   assert.equal(current.deploymentId, 'vercel-new');
   assert.equal(current.deploymentCount, 2);
