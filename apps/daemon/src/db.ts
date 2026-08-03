@@ -256,6 +256,44 @@ export function upsertDeployment(db, deployment) {
   return getDeployment(db, next.projectId, next.fileName, next.providerId);
 }
 
+/**
+ * Patch only link-check fields for a deployment row.
+ * Never updates url / deployment_id / deployment_count — those belong to
+ * deploy. Matches on expectedUrl so a concurrent redeploy cannot be
+ * overwritten by a stale check-link that started against the previous URL.
+ * Returns null when the row is gone or the URL no longer matches.
+ */
+export function updateDeploymentLinkStatus(db, {
+  projectId,
+  id,
+  expectedUrl,
+  status,
+  statusMessage = null,
+  reachableAt = null,
+  updatedAt = Date.now(),
+}) {
+  const info = db
+    .prepare(
+      `UPDATE deployments
+          SET status = ?,
+              status_message = ?,
+              reachable_at = COALESCE(?, reachable_at),
+              updated_at = ?
+        WHERE project_id = ? AND id = ? AND url = ?`,
+    )
+    .run(
+      status,
+      statusMessage,
+      reachableAt,
+      updatedAt,
+      projectId,
+      id,
+      expectedUrl,
+    );
+  if (!info.changes) return null;
+  return getDeploymentById(db, projectId, id);
+}
+
 function normalizeDeployment(row) {
   return {
     id: row.id,
