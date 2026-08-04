@@ -2,10 +2,12 @@
 // Per-provider credentials for the media dispatcher.
 //
 // The frontend Settings dialog pushes API keys here via PUT
-// /api/media/config; the daemon persists them to .od/media-config.json
-// and reads them at generation time. Environment variables override the
-// stored values so power users can keep keys out of the workspace
-// folder altogether (`OD_OPENAI_API_KEY=… node daemon/cli.js`).
+// /api/media/config; the daemon persists them under the runtime data
+// directory (same root as SQLite / projects — `.od/` by default, or
+// `OD_DATA_DIR` when set) as `media-config.json`, and reads them at
+// generation time. Environment variables override the stored values so
+// power users can keep keys out of the workspace folder altogether
+// (`OD_OPENAI_API_KEY=… node daemon/cli.js`).
 //
 // The file is intentionally simple JSON — no encryption, no schema
 // versioning yet. The daemon listens on 127.0.0.1 only and the workspace
@@ -13,7 +15,9 @@
 // We DO mask keys when reading via the GET endpoint so the UI doesn't
 // echo secrets back into the DOM.
 
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import fs from 'node:fs';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
+import { randomUUID } from 'node:crypto';
 import path from 'node:path';
 import { MEDIA_PROVIDERS } from './media-models.js';
 
@@ -45,13 +49,15 @@ const ENV_KEYS = {
   fishaudio: ['OD_FISHAUDIO_API_KEY', 'FISH_AUDIO_API_KEY'],
 };
 
-function configFile(projectRoot) {
-  return path.join(projectRoot, '.od', 'media-config.json');
+/** Absolute path to media-config.json inside the runtime data directory. */
+export function mediaConfigPath(dataDir) {
+  return path.join(dataDir, 'media-config.json');
 }
 
-async function readStored(projectRoot) {
+async function readStored(dataDir) {
   try {
-    const raw = await readFile(configFile(projectRoot), 'utf8');
+    const raw = await readFile(mediaConfigPath(dataDir), 'utf8');
+    if (!raw.trim()) return {};
     const parsed = JSON.parse(raw);
     if (parsed && typeof parsed === 'object' && parsed.providers) {
       return parsed.providers;
@@ -59,14 +65,30 @@ async function readStored(projectRoot) {
     return {};
   } catch (err) {
     if (err && err.code === 'ENOENT') return {};
+    if (err instanceof SyntaxError) return {};
     throw err;
   }
 }
 
-async function writeStored(projectRoot, providers) {
-  const file = configFile(projectRoot);
+async function writeStored(dataDir, providers) {
+  const file = mediaConfigPath(dataDir);
   await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, JSON.stringify({ providers }, null, 2), 'utf8');
+  // Atomic replace so a crash mid-write cannot leave a truncated file that
+  // bricks later GET/PUT until a manual delete.
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify({ providers }, null, 2)}\n`, {
+      mode: 0o600,
+    });
+    await rename(tmp, file);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // best-effort cleanup
+    }
+    throw err;
+  }
 }
 
 function readEnvKey(providerId) {
@@ -83,8 +105,8 @@ function readEnvKey(providerId) {
  * Resolve credentials for a provider. Env vars win, then stored config.
  * Returns { apiKey, baseUrl } where either may be empty string.
  */
-export async function resolveProviderConfig(projectRoot, providerId) {
-  const stored = await readStored(projectRoot);
+export async function resolveProviderConfig(dataDir, providerId) {
+  const stored = await readStored(dataDir);
   const entry = stored[providerId] || {};
   const envKey = readEnvKey(providerId);
   return {
@@ -97,9 +119,11 @@ export async function resolveProviderConfig(projectRoot, providerId) {
  * Read the full config for the GET endpoint. API keys are masked so the
  * frontend can show "••••" + a "configured" indicator without leaking
  * the secret back into the DOM.
+ *
+ * @param {string} dataDir Absolute runtime data directory (same as SQLite).
  */
-export async function readMaskedConfig(projectRoot) {
-  const stored = await readStored(projectRoot);
+export async function readMaskedConfig(dataDir) {
+  const stored = await readStored(dataDir);
   const providers = {};
   for (const id of PROVIDER_IDS) {
     const entry = stored[id] || {};
@@ -130,7 +154,10 @@ export async function readMaskedConfig(projectRoot) {
  * pushing `{providers: {}}` onto a daemon that had keys from a
  * previous session) without silently destroying the user's data.
  */
-export async function writeConfig(projectRoot, body) {
+/**
+ * @param {string} dataDir Absolute runtime data directory (same as SQLite).
+ */
+export async function writeConfig(dataDir, body) {
   const incoming = body && typeof body === 'object' ? body.providers || {} : {};
   const force = Boolean(body && typeof body === 'object' && body.force === true);
   const next = {};
@@ -149,7 +176,7 @@ export async function writeConfig(projectRoot, body) {
     next[id] = { apiKey, baseUrl };
   }
   if (Object.keys(next).length === 0) {
-    const prior = await readStored(projectRoot);
+    const prior = await readStored(dataDir);
     const priorIds = Object.keys(prior).filter(
       (id) => prior[id] && (prior[id].apiKey || prior[id].baseUrl),
     );
@@ -170,6 +197,6 @@ export async function writeConfig(projectRoot, body) {
       }
     }
   }
-  await writeStored(projectRoot, next);
-  return readMaskedConfig(projectRoot);
+  await writeStored(dataDir, next);
+  return readMaskedConfig(dataDir);
 }
