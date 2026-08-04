@@ -1,22 +1,26 @@
-import { mkdtemp, writeFile, mkdir } from 'node:fs/promises';
+import { mkdtemp, readFile, writeFile, mkdir } from 'node:fs/promises';
 import http, { type IncomingMessage, type ServerResponse } from 'node:http';
 import type { AddressInfo } from 'node:net';
 import os from 'node:os';
 import path from 'node:path';
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 
 import {
   buildDeployFileSet,
   checkDeploymentUrl,
+  deployConfigPath,
   deploymentUrlCandidates,
   extractCssReferences,
   extractHtmlReferences,
   injectDeployHookScript,
   isVercelProtectedResponse,
   normalizeDeployHookScriptUrl,
+  readVercelConfig,
   resolveReferencedPath,
   rewriteEntryHtmlReferences,
+  SAVED_TOKEN_MASK,
   waitForReachableDeploymentUrl,
+  writeVercelConfig,
 } from '../src/deploy.js';
 import { ensureProject } from '../src/projects.js';
 
@@ -352,5 +356,79 @@ describe('deployment link readiness', () => {
       'set-cookie': '_vercel_sso_nonce=test',
     });
     expect(isVercelProtectedResponse({ headers }, 'Authentication Required')).toBe(true);
+  });
+});
+
+describe('vercel deploy config persistence', () => {
+  const priorStateDir = process.env.OD_USER_STATE_DIR;
+
+  afterEach(() => {
+    if (priorStateDir === undefined) delete process.env.OD_USER_STATE_DIR;
+    else process.env.OD_USER_STATE_DIR = priorStateDir;
+  });
+
+  async function withStateDir() {
+    const dir = await mkdtemp(path.join(os.tmpdir(), 'od-vercel-config-'));
+    process.env.OD_USER_STATE_DIR = dir;
+    return dir;
+  }
+
+  it('recovers from truncated/corrupt vercel.json so PUT can save again', async () => {
+    const dir = await withStateDir();
+    await writeFile(path.join(dir, 'vercel.json'), '');
+
+    await expect(readVercelConfig()).resolves.toEqual({
+      token: '',
+      teamId: '',
+      teamSlug: '',
+    });
+
+    const published = await writeVercelConfig({
+      token: 'fresh-token',
+      teamId: 'team-1',
+      teamSlug: 'slug-1',
+    });
+    expect(published).toMatchObject({
+      configured: true,
+      tokenMask: SAVED_TOKEN_MASK,
+      teamId: 'team-1',
+      teamSlug: 'slug-1',
+    });
+    await expect(readVercelConfig()).resolves.toEqual({
+      token: 'fresh-token',
+      teamId: 'team-1',
+      teamSlug: 'slug-1',
+    });
+  });
+
+  it('preserves a newly saved token across concurrent team-only PUTs', async () => {
+    await withStateDir();
+    await writeVercelConfig({ token: 'old-token', teamId: '', teamSlug: '' });
+
+    const [teamUpdate, tokenUpdate] = await Promise.all([
+      writeVercelConfig({
+        token: SAVED_TOKEN_MASK,
+        teamId: 'team-a',
+        teamSlug: '',
+      }),
+      writeVercelConfig({
+        token: 'new-token',
+        teamId: '',
+        teamSlug: '',
+      }),
+    ]);
+
+    expect(teamUpdate.configured).toBe(true);
+    expect(tokenUpdate.configured).toBe(true);
+
+    const final = await readVercelConfig();
+    expect(final.token).toBe('new-token');
+    expect(final.teamId).toBe('team-a');
+
+    const raw = await readFile(deployConfigPath(), 'utf8');
+    expect(JSON.parse(raw)).toMatchObject({
+      token: 'new-token',
+      teamId: 'team-a',
+    });
   });
 });

@@ -1,6 +1,6 @@
 // @ts-nocheck
 import fs from 'node:fs';
-import { mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
@@ -12,6 +12,10 @@ export const SAVED_TOKEN_MASK = 'saved-vercel-token';
 const VERCEL_API = 'https://api.vercel.com';
 const VERCEL_PROTECTED_MESSAGE =
   'Deployment is protected by Vercel. Disable Deployment Protection or use a custom domain to make this link public.';
+
+// Serialize read-modify-write so concurrent PUT /api/deploy/config calls cannot
+// clobber a newly saved token with a stale merge of the previous file.
+let vercelConfigWriteChain = Promise.resolve();
 
 export class DeployError extends Error {
   constructor(message, status = 400, details = undefined) {
@@ -27,42 +31,81 @@ export function deployConfigPath() {
   return path.join(base, 'vercel.json');
 }
 
+function emptyVercelConfig() {
+  return { token: '', teamId: '', teamSlug: '' };
+}
+
+function normalizeVercelConfig(parsed) {
+  return {
+    token: typeof parsed?.token === 'string' ? parsed.token : '',
+    teamId: typeof parsed?.teamId === 'string' ? parsed.teamId : '',
+    teamSlug: typeof parsed?.teamSlug === 'string' ? parsed.teamSlug : '',
+  };
+}
+
 export async function readVercelConfig() {
   try {
     const raw = await readFile(deployConfigPath(), 'utf8');
-    const parsed = JSON.parse(raw);
-    return {
-      token: typeof parsed.token === 'string' ? parsed.token : '',
-      teamId: typeof parsed.teamId === 'string' ? parsed.teamId : '',
-      teamSlug: typeof parsed.teamSlug === 'string' ? parsed.teamSlug : '',
-    };
+    // Empty/truncated mid-write leftovers must not brick GET/PUT forever —
+    // treat them as unset so the UI can save a fresh token.
+    if (!raw.trim()) return emptyVercelConfig();
+    return normalizeVercelConfig(JSON.parse(raw));
   } catch (err) {
-    if (err && err.code === 'ENOENT') return { token: '', teamId: '', teamSlug: '' };
+    if (err && err.code === 'ENOENT') return emptyVercelConfig();
+    if (err instanceof SyntaxError) return emptyVercelConfig();
+    throw err;
+  }
+}
+
+async function writeVercelConfigFile(next) {
+  const file = deployConfigPath();
+  await mkdir(path.dirname(file), { recursive: true });
+  // Atomic replace: never leave a truncated vercel.json that JSON.parse
+  // rejects (which previously made both GET and PUT unusable until manual
+  // delete). Write to a sibling temp file, then rename over the target.
+  const tmp = `${file}.${process.pid}.${randomUUID()}.tmp`;
+  try {
+    await writeFile(tmp, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
+    try {
+      fs.chmodSync(tmp, 0o600);
+    } catch {
+      // Best effort on filesystems that do not support chmod.
+    }
+    await rename(tmp, file);
+  } catch (err) {
+    try {
+      fs.unlinkSync(tmp);
+    } catch {
+      // best-effort cleanup
+    }
     throw err;
   }
 }
 
 export async function writeVercelConfig(input) {
-  const current = await readVercelConfig();
-  const tokenInput = typeof input?.token === 'string' ? input.token.trim() : '';
-  const next = {
-    token:
-      tokenInput && tokenInput !== SAVED_TOKEN_MASK
-        ? tokenInput
-        : current.token,
-    teamId: typeof input?.teamId === 'string' ? input.teamId.trim() : current.teamId,
-    teamSlug:
-      typeof input?.teamSlug === 'string' ? input.teamSlug.trim() : current.teamSlug,
+  const run = async () => {
+    const current = await readVercelConfig();
+    const tokenInput = typeof input?.token === 'string' ? input.token.trim() : '';
+    const next = {
+      token:
+        tokenInput && tokenInput !== SAVED_TOKEN_MASK
+          ? tokenInput
+          : current.token,
+      teamId: typeof input?.teamId === 'string' ? input.teamId.trim() : current.teamId,
+      teamSlug:
+        typeof input?.teamSlug === 'string' ? input.teamSlug.trim() : current.teamSlug,
+    };
+    await writeVercelConfigFile(next);
+    return publicDeployConfig(next);
   };
-  const file = deployConfigPath();
-  await mkdir(path.dirname(file), { recursive: true });
-  await writeFile(file, `${JSON.stringify(next, null, 2)}\n`, { mode: 0o600 });
-  try {
-    fs.chmodSync(file, 0o600);
-  } catch {
-    // Best effort on filesystems that do not support chmod.
-  }
-  return publicDeployConfig(next);
+
+  const queued = vercelConfigWriteChain.then(run, run);
+  // Keep the chain alive after failures so later writes still serialize.
+  vercelConfigWriteChain = queued.then(
+    () => undefined,
+    () => undefined,
+  );
+  return queued;
 }
 
 export function publicDeployConfig(config) {
