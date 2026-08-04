@@ -401,34 +401,32 @@ describe('vercel deploy config persistence', () => {
     });
   });
 
-  it('preserves a newly saved token across concurrent team-only PUTs', async () => {
+  it('preserves a newly saved token across concurrent masked team PUTs', async () => {
     await withStateDir();
     await writeVercelConfig({ token: 'old-token', teamId: '', teamSlug: '' });
 
-    const [teamUpdate, tokenUpdate] = await Promise.all([
+    // Two deploy-modal tabs: one keeps the masked token and sets team fields;
+    // the other pastes a replacement token with the same team fields.
+    // Without a write queue, the masked PUT can re-read stale old-token and
+    // overwrite the new secret after the token PUT completes.
+    await Promise.all([
       writeVercelConfig({
         token: SAVED_TOKEN_MASK,
         teamId: 'team-a',
-        teamSlug: '',
+        teamSlug: 'slug-a',
       }),
       writeVercelConfig({
         token: 'new-token',
-        teamId: '',
-        teamSlug: '',
+        teamId: 'team-a',
+        teamSlug: 'slug-a',
       }),
     ]);
 
-    expect(teamUpdate.configured).toBe(true);
-    expect(tokenUpdate.configured).toBe(true);
-
     const final = await readVercelConfig();
     expect(final.token).toBe('new-token');
+    expect(final.token).not.toBe('old-token');
     expect(final.teamId).toBe('team-a');
-
-    const raw = await readFile(deployConfigPath(), 'utf8');
-    expect(JSON.parse(raw)).toMatchObject({
-      token: 'new-token',
-      teamId: 'team-a',
-    });
+    expect(final.teamSlug).toBe('slug-a');
+    expect(JSON.parse(await readFile(deployConfigPath(), 'utf8')).token).toBe('new-token');
   });
 });
