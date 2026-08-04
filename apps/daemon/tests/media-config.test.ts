@@ -56,10 +56,14 @@ describe('media-config data directory', () => {
 
     const maskedA = await readMaskedConfig(nsA);
     const maskedB = await readMaskedConfig(nsB);
-    expect(maskedA.providers.openai.configured).toBe(true);
-    expect(maskedA.providers.fal.configured).toBe(false);
-    expect(maskedB.providers.openai.configured).toBe(false);
-    expect(maskedB.providers.fal.configured).toBe(true);
+    expect(maskedA.providers).toMatchObject({
+      openai: { configured: true },
+      fal: { configured: false },
+    });
+    expect(maskedB.providers).toMatchObject({
+      openai: { configured: false },
+      fal: { configured: true },
+    });
   });
 
   it('recovers from truncated media-config.json so PUT can save again', async () => {
@@ -74,8 +78,9 @@ describe('media-config data directory', () => {
     const published = await writeConfig(dataDir, {
       providers: { openai: { apiKey: 'sk-recovered', baseUrl: '' } },
     });
-    expect(published.providers.openai.configured).toBe(true);
-    expect(published.providers.openai.apiKeyTail).toBe('ered');
+    expect(published.providers).toMatchObject({
+      openai: { configured: true, apiKeyTail: 'ered' },
+    });
 
     const raw = JSON.parse(await readFile(file, 'utf8'));
     expect(raw.providers.openai.apiKey).toBe('sk-recovered');
