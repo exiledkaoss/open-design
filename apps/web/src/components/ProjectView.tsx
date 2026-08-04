@@ -48,6 +48,7 @@ import type {
 } from '../types';
 import { AvatarMenu } from './AvatarMenu';
 import { ChatPane } from './ChatPane';
+import { detachRunSubscriptions } from './detach-run-subscriptions';
 import { FileWorkspace } from './FileWorkspace';
 import { Icon } from './Icon';
 
@@ -184,16 +185,23 @@ export function ProjectView({
     };
   }, [project.id, activeConversationId]);
 
+  // Detach local SSE subscriptions when leaving a conversation/project.
+  // Per specs/current/run.md, Stop is the only cancel action — route and
+  // conversation changes must close the browser stream without POSTing
+  // /api/runs/:id/cancel. Also clear the streaming latch: AbortError from
+  // stream teardown skips onDone/onError, so without this the composer stays
+  // stuck on Stop and attachRecoverableRuns is gated out (`if (streaming)`).
   useEffect(() => {
     return () => {
-      for (const controller of reattachControllersRef.current.values()) {
-        controller.abort();
-      }
-      for (const controller of reattachCancelControllersRef.current.values()) {
-        controller.abort();
-      }
-      reattachControllersRef.current.clear();
-      reattachCancelControllersRef.current.clear();
+      const next = detachRunSubscriptions({
+        reattachControllers: reattachControllersRef.current,
+        reattachCancelControllers: reattachCancelControllersRef.current,
+        abortController: abortRef.current,
+        cancelController: cancelRef.current,
+        setStreaming,
+      });
+      abortRef.current = next.abortController;
+      cancelRef.current = next.cancelController;
     };
   }, [project.id, activeConversationId]);
 

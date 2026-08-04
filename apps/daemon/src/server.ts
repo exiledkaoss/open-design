@@ -1306,7 +1306,10 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
   app.get('/api/media/config', async (_req, res) => {
     try {
-      const cfg = await readMaskedConfig(PROJECT_ROOT);
+      // Keep credentials under RUNTIME_DATA_DIR (honors OD_DATA_DIR) so
+      // packaged/tools-dev namespaces do not share or clobber a global
+      // <repo>/.od/media-config.json outside the namespace data root.
+      const cfg = await readMaskedConfig(RUNTIME_DATA_DIR);
       res.json(cfg);
     } catch (err) {
       res.status(500).json({ error: String(err && err.message ? err.message : err) });
@@ -1315,7 +1318,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
   app.put('/api/media/config', async (req, res) => {
     try {
-      const cfg = await writeConfig(PROJECT_ROOT, req.body);
+      const cfg = await writeConfig(RUNTIME_DATA_DIR, req.body);
       res.json(cfg);
     } catch (err) {
       const status = typeof err?.status === 'number' ? err.status : 400;
@@ -1349,6 +1352,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
       task.status = 'running';
       generateMedia({
+        // Credentials live beside SQLite under OD_DATA_DIR when set.
+        dataDir: RUNTIME_DATA_DIR,
         projectRoot: PROJECT_ROOT,
         projectsRoot: PROJECTS_DIR,
         projectId,

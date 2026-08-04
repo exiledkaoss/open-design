@@ -189,8 +189,9 @@ function clampWithWarning(value, allowed, flagName) {
  * Generate a media artifact and write it into the project's files dir.
  *
  * @param {Object} args
- * @param {string} args.projectRoot   - Repo root (.od/ lives directly under).
- * @param {string} args.projectsRoot  - Absolute path to <repo>/.od/projects.
+ * @param {string} [args.dataDir]     - Runtime data dir (media-config.json). Prefers OD_DATA_DIR.
+ * @param {string} [args.projectRoot] - Repo root; used only as legacy fallback for dataDir.
+ * @param {string} args.projectsRoot  - Absolute path to <dataDir>/projects.
  * @param {string} args.projectId
  * @param {'image'|'video'|'audio'} args.surface
  * @param {string} args.model
@@ -205,6 +206,7 @@ function clampWithWarning(value, allowed, flagName) {
  */
 export async function generateMedia(args) {
   const {
+    dataDir: dataDirArg,
     projectRoot,
     projectsRoot,
     projectId,
@@ -221,7 +223,15 @@ export async function generateMedia(args) {
     image,
   } = args;
 
-  if (!projectRoot) throw new Error('projectRoot required');
+  // Prefer explicit dataDir (OD_DATA_DIR / RUNTIME_DATA_DIR). Fall back to
+  // <projectRoot>/.od for older callers that only passed the repo root.
+  const dataDir =
+    typeof dataDirArg === 'string' && dataDirArg
+      ? dataDirArg
+      : projectRoot
+        ? path.join(projectRoot, '.od')
+        : '';
+  if (!dataDir) throw new Error('dataDir required');
   if (!projectsRoot) throw new Error('projectsRoot required');
   if (typeof projectId !== 'string' || !projectId) {
     throw new Error('projectId required');
@@ -309,7 +319,7 @@ export async function generateMedia(args) {
     imageRef,
   };
 
-  const credentials = await resolveProviderConfig(projectRoot, def.provider);
+  const credentials = await resolveProviderConfig(dataDir, def.provider);
 
   let bytes;
   let providerNote;
