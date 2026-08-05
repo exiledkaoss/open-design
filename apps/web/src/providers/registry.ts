@@ -190,14 +190,15 @@ export async function checkDeploymentLink(
 
 // Project files — all paths are scoped under .od/projects/<id>/ on disk.
 
-export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[]> {
+/** `null` means transport/HTTP failure — callers must not treat it as an empty folder. */
+export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[] | null> {
   try {
     const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`);
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const json = (await resp.json()) as { files: ProjectFile[] };
     return json.files ?? [];
   } catch {
-    return [];
+    return null;
   }
 }
 

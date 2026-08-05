@@ -121,6 +121,9 @@ export function ProjectView({
   const reattachControllersRef = useRef<Map<string, AbortController>>(new Map());
   const reattachCancelControllersRef = useRef<Map<string, AbortController>>(new Map());
   const completedReattachRunsRef = useRef<Set<string>>(new Set());
+  // Bumped when a reattach status lookup is transiently unavailable so we
+  // retry without persisting a false `failed` terminal state.
+  const [reattachRetryTick, setReattachRetryTick] = useState(0);
   const skillCache = useRef<Map<string, string>>(new Map());
   const designCache = useRef<Map<string, string>>(new Map());
   const templateCache = useRef<Map<string, ProjectTemplate>>(new Map());
@@ -224,8 +227,13 @@ export function ProjectView({
     [project.id],
   );
 
+  const projectFilesRef = useRef<ProjectFile[]>(projectFiles);
+  projectFilesRef.current = projectFiles;
   const refreshProjectFiles = useCallback(async (): Promise<ProjectFile[]> => {
     const next = await fetchProjectFiles(project.id);
+    // Transport failures return null — keep the last good list so collision
+    // checks (persistArtifact) and openable-file sets do not see a fake empty folder.
+    if (next === null) return projectFilesRef.current;
     setProjectFiles(next);
     return next;
   }, [project.id]);
@@ -425,9 +433,17 @@ export function ProjectView({
           );
         }
 
-        const status = fallbackRun ?? await fetchChatRunStatus(runId);
+        const lookup = fallbackRun
+          ? ({ kind: 'found', run: fallbackRun } as const)
+          : await fetchChatRunStatus(runId);
         if (cancelled) return;
-        if (!status) {
+        if (lookup.kind === 'unavailable') {
+          window.setTimeout(() => {
+            if (!cancelled) setReattachRetryTick((n) => n + 1);
+          }, 1000);
+          continue;
+        }
+        if (lookup.kind === 'missing') {
           updateMessageById(
             message.id,
             (prev) => ({ ...prev, runStatus: 'failed', endedAt: prev.endedAt ?? Date.now() }),
@@ -436,6 +452,7 @@ export function ProjectView({
           completedReattachRunsRef.current.add(runId);
           continue;
         }
+        const status = lookup.run;
         updateMessageById(
           message.id,
           (prev) => ({ ...prev, runStatus: status.status }),
@@ -568,6 +585,7 @@ export function ProjectView({
     persistMessageById,
     refreshProjectFiles,
     onProjectsRefresh,
+    reattachRetryTick,
   ]);
 
   const handleSend = useCallback(
@@ -842,13 +860,19 @@ export function ProjectView({
         .slice(0, 60) || 'artifact';
       // Pick a name that doesn't collide with an existing project file.
       // The first run uses `<base>.html`; subsequent runs append `-2`, `-3`…
-      // so prior artifacts aren't silently overwritten.
-      const existing = new Set(projectFiles.map((f) => f.name));
+      // so prior artifacts aren't silently overwritten. Re-list at write time;
+      // if listing fails, use an entropy suffix instead of risking a clobber.
+      const listed = await fetchProjectFiles(project.id);
+      const existing = new Set((listed ?? projectFiles).map((f) => f.name));
       let fileName = `${baseName}.html`;
-      let n = 2;
-      while (existing.has(fileName) && savedArtifactRef.current !== fileName) {
-        fileName = `${baseName}-${n}.html`;
-        n += 1;
+      if (listed === null) {
+        fileName = `${baseName}-${Date.now().toString(36)}.html`;
+      } else {
+        let n = 2;
+        while (existing.has(fileName) && savedArtifactRef.current !== fileName) {
+          fileName = `${baseName}-${n}.html`;
+          n += 1;
+        }
       }
       if (savedArtifactRef.current === fileName) return;
       savedArtifactRef.current = fileName;

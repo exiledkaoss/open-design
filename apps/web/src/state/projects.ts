@@ -14,14 +14,15 @@ import type {
   ProjectTemplate,
 } from '../types';
 
-export async function listProjects(): Promise<Project[]> {
+/** `null` means transport/HTTP failure — callers must not treat it as “no projects”. */
+export async function listProjects(): Promise<Project[] | null> {
   try {
     const resp = await fetch('/api/projects');
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const json = (await resp.json()) as { projects: Project[] };
     return json.projects ?? [];
   } catch {
-    return [];
+    return null;
   }
 }
 

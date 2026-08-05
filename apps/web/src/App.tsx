@@ -74,7 +74,8 @@ export function App() {
       setAgents(agentList);
       setSkills(skillList);
       setDesignSystems(dsList);
-      setProjects(projectList);
+      // listProjects returns null on transport failure — keep any prior list.
+      if (projectList) setProjects(projectList);
       setTemplates(templateList);
       setPromptTemplates(promptTemplateList);
 
@@ -115,7 +116,7 @@ export function App() {
 
   const refreshProjects = useCallback(async () => {
     const list = await listProjects();
-    setProjects(list);
+    if (list) setProjects(list);
   }, []);
 
   const refreshTemplates = useCallback(async () => {
@@ -272,6 +273,8 @@ export function App() {
     (async () => {
       const list = await listProjects();
       if (cancelled) return;
+      // Transport failure: do not wipe the in-memory list or bounce home.
+      if (!list) return;
       setProjects(list);
       if (!list.find((p) => p.id === route.projectId)) {
         navigate({ kind: 'home' }, { replace: true });
