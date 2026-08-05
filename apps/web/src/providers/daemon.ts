@@ -151,13 +151,19 @@ export async function reattachDaemonRun(options: DaemonReattachOptions): Promise
   await consumeDaemonRun(options);
 }
 
-export async function fetchChatRunStatus(runId: string): Promise<ChatRunStatusResponse | null> {
+export type ChatRunStatusLookup =
+  | { kind: 'found'; run: ChatRunStatusResponse }
+  | { kind: 'missing' }
+  | { kind: 'unavailable' };
+
+export async function fetchChatRunStatus(runId: string): Promise<ChatRunStatusLookup> {
   try {
     const resp = await fetch(`/api/runs/${encodeURIComponent(runId)}`);
-    if (!resp.ok) return null;
-    return (await resp.json()) as ChatRunStatusResponse;
+    if (resp.status === 404) return { kind: 'missing' };
+    if (!resp.ok) return { kind: 'unavailable' };
+    return { kind: 'found', run: (await resp.json()) as ChatRunStatusResponse };
   } catch {
-    return null;
+    return { kind: 'unavailable' };
   }
 }
 
@@ -307,7 +313,8 @@ async function consumeDaemonRun({
     }
 
     if (endStatus === null) {
-      const status = await fetchChatRunStatus(runId);
+      const lookup = await fetchChatRunStatus(runId);
+      const status = lookup.kind === 'found' ? lookup.run : null;
       if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
         endStatus = status.status;
         exitCode = status.exitCode ?? null;
