@@ -108,6 +108,43 @@ export function resolveProjectRoot(moduleDir: string): string {
   return path.resolve(daemonDir, '../..');
 }
 
+/**
+ * Resolve the `od` CLI script agents should invoke via `node "$OD_BIN" …`.
+ *
+ * Packaged installs run from `node_modules/@open-design/daemon/dist`, so the
+ * CLI is a sibling of this module — not under `<repo>/apps/daemon/dist`.
+ */
+export function resolveOdBin(moduleDir = __dirname, { existsSync = fs.existsSync } = {}) {
+  const candidates = [
+    path.join(moduleDir, 'cli.js'),
+    path.join(path.dirname(moduleDir), 'dist', 'cli.js'),
+    path.join(resolveProjectRoot(moduleDir), 'apps', 'daemon', 'dist', 'cli.js'),
+  ];
+  for (const candidate of candidates) {
+    if (existsSync(candidate)) return candidate;
+  }
+  return candidates[0];
+}
+
+/** Env injected into agent child processes for media dispatcher calls. */
+export function buildAgentMediaEnv({
+  odBin,
+  daemonPort,
+  projectId,
+  projectDir,
+}) {
+  return {
+    OD_BIN: odBin,
+    OD_DAEMON_URL: `http://127.0.0.1:${daemonPort}`,
+    ...(typeof projectId === 'string' && projectId && projectDir
+      ? {
+          OD_PROJECT_ID: projectId,
+          OD_PROJECT_DIR: projectDir,
+        }
+      : {}),
+  };
+}
+
 const PROJECT_ROOT = resolveProjectRoot(__dirname);
 const RESOURCE_ROOT_ENV = 'OD_RESOURCE_ROOT';
 
@@ -159,7 +196,7 @@ const DAEMON_RESOURCE_ROOT = resolveDaemonResourceRoot();
 // when this project shipped with Vite; the daemon serves whatever the
 // frontend toolchain emits, no further config needed.
 const STATIC_DIR = path.join(PROJECT_ROOT, 'apps', 'web', 'out');
-const OD_BIN = path.join(PROJECT_ROOT, 'apps', 'daemon', 'dist', 'cli.js');
+const OD_BIN = resolveOdBin(__dirname);
 const SKILLS_DIR = resolveDaemonResourceDir(
   DAEMON_RESOURCE_ROOT,
   'skills',
@@ -457,6 +494,10 @@ export function createSseResponse(res, { keepAliveIntervalMs = SSE_KEEPALIVE_INT
 export async function startServer({ port = 7456, returnServer = false } = {}) {
   const app = express();
   app.use(express.json({ limit: '4mb' }));
+  // When callers pass port 0 (packaged + default tools-dev), Node binds an
+  // ephemeral port. Media origin checks and agent OD_DAEMON_URL must use the
+  // bound port, not the request-time 0 placeholder.
+  const listen = { port };
   const db = openDatabase(PROJECT_ROOT, { dataDir: RUNTIME_DATA_DIR });
 
   if (process.env.OD_CODEX_DISABLE_PLUGINS === '1') {
@@ -1324,7 +1365,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   });
 
   app.post('/api/projects/:id/media/generate', async (req, res) => {
-    if (!isLocalSameOrigin(req, port)) {
+    if (!isLocalSameOrigin(req, listen.port)) {
       return res.status(403).json({
         error: 'cross-origin request rejected: media generation is restricted to the local UI / CLI',
       });
@@ -1406,7 +1447,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   });
 
   app.post('/api/media/tasks/:id/wait', async (req, res) => {
-    if (!isLocalSameOrigin(req, port)) {
+    if (!isLocalSameOrigin(req, listen.port)) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
     const taskId = req.params.id;
@@ -1456,7 +1497,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
   });
 
   app.get('/api/projects/:id/media/tasks', (req, res) => {
-    if (!isLocalSameOrigin(req, port)) {
+    if (!isLocalSameOrigin(req, listen.port)) {
       return res.status(403).json({ error: 'cross-origin request rejected' });
     }
     const projectId = req.params.id;
@@ -1794,16 +1835,12 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     // case this branch covers.
     const useShell =
       process.platform === 'win32' && CMD_BAT_RE.test(resolvedBin);
-    const odMediaEnv = {
-      OD_BIN,
-      OD_DAEMON_URL: `http://127.0.0.1:${port}`,
-      ...(typeof projectId === 'string' && projectId && cwd
-        ? {
-            OD_PROJECT_ID: projectId,
-            OD_PROJECT_DIR: cwd,
-          }
-        : {}),
-    };
+    const odMediaEnv = buildAgentMediaEnv({
+      odBin: OD_BIN,
+      daemonPort: listen.port,
+      projectId,
+      projectDir: cwd,
+    });
 
     if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
@@ -2107,6 +2144,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     const server = app.listen(port, '127.0.0.1', () => {
       const address = server.address();
       const actualPort = typeof address === 'object' && address ? address.port : port;
+      listen.port = actualPort;
       const url = `http://127.0.0.1:${actualPort}`;
       resolve(returnServer ? { url, server } : url);
     });
@@ -2139,7 +2177,7 @@ function escapeHtml(s) {
     .replace(/"/g, '&quot;');
 }
 
-function isLocalSameOrigin(req, port) {
+export function isLocalSameOrigin(req, port) {
   const allowedHosts = new Set([
     `127.0.0.1:${port}`,
     `localhost:${port}`,
