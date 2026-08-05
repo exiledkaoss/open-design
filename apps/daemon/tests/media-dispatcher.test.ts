@@ -1,3 +1,4 @@
+import type { PathLike } from 'node:fs';
 import path from 'node:path';
 import { afterAll, describe, expect, it } from 'vitest';
 
@@ -8,31 +9,33 @@ import {
   startServer,
 } from '../src/server.js';
 
+function existsOnly(...paths: string[]) {
+  const allowed = new Set(paths);
+  return (candidate: PathLike) => allowed.has(String(candidate));
+}
+
 describe('resolveOdBin', () => {
   it('prefers the CLI next to a packaged daemon dist module', () => {
     const moduleDir = '/App/Contents/Resources/app/node_modules/@open-design/daemon/dist';
-    const existsSync = (candidate: string) =>
-      candidate === path.join(moduleDir, 'cli.js');
+    const expected = path.join(moduleDir, 'cli.js');
 
-    expect(resolveOdBin(moduleDir, { existsSync })).toBe(path.join(moduleDir, 'cli.js'));
+    expect(resolveOdBin(moduleDir, { existsSync: existsOnly(expected) })).toBe(expected);
   });
 
   it('resolves the monorepo CLI from the compiled daemon dist directory', () => {
     const root = path.resolve(import.meta.dirname, '../../..');
     const moduleDir = path.join(root, 'apps', 'daemon', 'dist');
-    const existsSync = (candidate: string) =>
-      candidate === path.join(moduleDir, 'cli.js');
+    const expected = path.join(moduleDir, 'cli.js');
 
-    expect(resolveOdBin(moduleDir, { existsSync })).toBe(path.join(moduleDir, 'cli.js'));
+    expect(resolveOdBin(moduleDir, { existsSync: existsOnly(expected) })).toBe(expected);
   });
 
   it('resolves the built CLI when the server is loaded from src via tsx', () => {
     const root = path.resolve(import.meta.dirname, '../../..');
     const moduleDir = path.join(root, 'apps', 'daemon', 'src');
     const expected = path.join(root, 'apps', 'daemon', 'dist', 'cli.js');
-    const existsSync = (candidate: string) => candidate === expected;
 
-    expect(resolveOdBin(moduleDir, { existsSync })).toBe(expected);
+    expect(resolveOdBin(moduleDir, { existsSync: existsOnly(expected) })).toBe(expected);
   });
 });
 
