@@ -301,6 +301,10 @@ export const en: Dict = {
 
   'project.backToProjects': 'Back to projects',
   'project.metaFreeform': 'freeform',
+  'project.error.loadConversations':
+    'Could not load conversations. Retry by reopening the project.',
+  'project.error.loadMessages':
+    'Could not load messages. Retry by reselecting the conversation.',
   'chat.tabChat': 'Chat',
   'chat.tabComments': 'Comments',
   'chat.commentsSoon': 'Comments — coming soon',

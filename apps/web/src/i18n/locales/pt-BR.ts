@@ -300,6 +300,10 @@ export const ptBR: Dict = {
 
   'project.backToProjects': 'Voltar aos projetos',
   'project.metaFreeform': 'livre',
+  'project.error.loadConversations':
+    'Não foi possível carregar as conversas. Reabra o projeto para tentar de novo.',
+  'project.error.loadMessages':
+    'Não foi possível carregar as mensagens. Selecione a conversa novamente para tentar de novo.',
   'chat.tabChat': 'Chat',
   'chat.tabComments': 'Comentários',
   'chat.commentsSoon': 'Comentários — em breve',
