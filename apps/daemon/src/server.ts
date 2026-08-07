@@ -742,10 +742,17 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       if (m.id && m.id !== req.params.mid) {
         return res.status(400).json({ error: 'id mismatch' });
       }
-      const saved = upsertMessage(db, req.params.cid, { ...m, id: req.params.mid });
-      // Bump the parent project's updatedAt so the project list re-orders.
-      updateProject(db, req.params.id, {});
-      res.json({ message: saved });
+      try {
+        const saved = upsertMessage(db, req.params.cid, { ...m, id: req.params.mid });
+        // Bump the parent project's updatedAt so the project list re-orders.
+        updateProject(db, req.params.id, {});
+        res.json({ message: saved });
+      } catch (err) {
+        if (err && err.code === 'MESSAGE_CONVERSATION_MISMATCH') {
+          return res.status(409).json({ error: String(err.message || err) });
+        }
+        throw err;
+      }
     },
   );
 
