@@ -10,7 +10,7 @@ describe('autoOutputName', () => {
   it('includes entropy so same-millisecond concurrent generates do not collide', () => {
     vi.spyOn(Date, 'now').mockReturnValue(1_700_000_000_000);
     const names = new Set(
-      Array.from({ length: 40 }, () => autoOutputName('image', 'gpt-image-2')),
+      Array.from({ length: 40 }, () => autoOutputName('image', 'gpt-image-2', undefined)),
     );
     expect(names.size).toBe(40);
     for (const name of names) {
