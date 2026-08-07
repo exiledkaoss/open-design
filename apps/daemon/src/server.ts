@@ -1032,9 +1032,12 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       if (typeof html !== 'string' || html.length === 0) {
         return res.status(400).json({ error: 'html required' });
       }
+      // Second-granularity ISO stamps alone collide when two saves share a
+      // second + slug; mkdir({recursive}) then quietly overwrites index.html.
       const stamp = new Date().toISOString().replace(/[:T]/g, '-').slice(0, 19);
+      const entropy = Math.random().toString(36).slice(2, 8);
       const slug = sanitizeSlug(identifier || title || 'artifact');
-      const dir = path.join(ARTIFACTS_DIR, `${stamp}-${slug}`);
+      const dir = path.join(ARTIFACTS_DIR, `${stamp}-${entropy}-${slug}`);
       fs.mkdirSync(dir, { recursive: true });
       const file = path.join(dir, 'index.html');
       fs.writeFileSync(file, html, 'utf8');
