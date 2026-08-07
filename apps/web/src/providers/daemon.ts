@@ -205,7 +205,35 @@ async function consumeDaemonRun({
       return;
     }
 
-    for (let reconnects = 0; endStatus === null && reconnects < 5;) {
+    // Keep retrying while the daemon run is still alive. A short SSE blip or
+    // proxy 502 must not permanently mark the assistant turn failed — that
+    // orphans the agent and blocks attachRecoverableRuns.
+    let consecutiveFailures = 0;
+    while (endStatus === null) {
+      if (cancelSignal?.aborted) {
+        cancelRun();
+        return;
+      }
+      if (consecutiveFailures >= 5) {
+        const status = await fetchChatRunStatus(runId);
+        if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
+          endStatus = status.status;
+          exitCode = status.exitCode ?? null;
+          exitSignal = status.signal ?? null;
+          onRunStatus?.(endStatus);
+          break;
+        }
+        if (status && (status.status === 'queued' || status.status === 'running')) {
+          // Run is still alive — keep trying, but yield so we don't hot-spin
+          // when the events endpoint is persistently failing.
+          consecutiveFailures = 0;
+          await new Promise((resolve) => setTimeout(resolve, 500));
+          continue;
+        }
+        handlers.onError(new Error('daemon stream disconnected before run completed'));
+        return;
+      }
+
       const qs = lastEventId ? `?after=${encodeURIComponent(lastEventId)}` : '';
       let resp: Response;
       try {
@@ -215,14 +243,20 @@ async function consumeDaemonRun({
         });
       } catch (err) {
         if ((err as Error).name === 'AbortError') throw err;
-        reconnects += 1;
+        consecutiveFailures += 1;
         continue;
       }
 
       if (!resp.ok || !resp.body) {
-        const text = await resp.text().catch(() => '');
-        handlers.onError(new Error(`daemon ${resp.status}: ${text || 'no body'}`));
-        return;
+        // 404: run is gone from the in-memory store — terminal for this client.
+        // 5xx / other errors: retry; the agent may still be running.
+        if (resp.status === 404) {
+          const text = await resp.text().catch(() => '');
+          handlers.onError(new Error(`daemon ${resp.status}: ${text || 'no body'}`));
+          return;
+        }
+        consecutiveFailures += 1;
+        continue;
       }
 
       const reader = resp.body.getReader();
@@ -303,20 +337,7 @@ async function consumeDaemonRun({
           }
         }
       }
-      reconnects = sawStreamProgress ? 0 : reconnects + 1;
-    }
-
-    if (endStatus === null) {
-      const status = await fetchChatRunStatus(runId);
-      if (status && isChatRunStatus(status.status) && status.status !== 'queued' && status.status !== 'running') {
-        endStatus = status.status;
-        exitCode = status.exitCode ?? null;
-        exitSignal = status.signal ?? null;
-        onRunStatus?.(endStatus);
-      } else {
-        handlers.onError(new Error('daemon stream disconnected before run completed'));
-        return;
-      }
+      consecutiveFailures = sawStreamProgress ? 0 : consecutiveFailures + 1;
     }
 
     if (endStatus === 'canceled') return;
