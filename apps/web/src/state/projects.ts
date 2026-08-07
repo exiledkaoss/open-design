@@ -254,7 +254,33 @@ export async function listMessages(
   }
 }
 
+// Serialize PUTs per message id. Streaming persists fire-and-forget on a
+// timer while onRunStatus/onDone also persist; without a chain, a slower
+// older snapshot can finish after a newer one and roll back content,
+// runId, or lastRunEventId in SQLite (last-write-wins by completion order).
+const messageWriteChains = new Map<string, Promise<void>>();
+
 export async function saveMessage(
+  projectId: string,
+  conversationId: string,
+  message: ChatMessage,
+): Promise<void> {
+  const key = `${projectId}\0${conversationId}\0${message.id}`;
+  const previous = messageWriteChains.get(key) ?? Promise.resolve();
+  const run = previous
+    .catch(() => undefined)
+    .then(() => saveMessageUnlocked(projectId, conversationId, message));
+  messageWriteChains.set(key, run);
+  try {
+    await run;
+  } finally {
+    if (messageWriteChains.get(key) === run) {
+      messageWriteChains.delete(key);
+    }
+  }
+}
+
+async function saveMessageUnlocked(
   projectId: string,
   conversationId: string,
   message: ChatMessage,
