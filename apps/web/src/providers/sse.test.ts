@@ -404,6 +404,12 @@ describe('streamViaDaemon', () => {
       const url = String(input);
       if (url === '/api/runs') return jsonResponse({ runId: 'run-1' });
       if (url === '/api/runs/run-1/events') return sseResponse('');
+      if (url === '/api/runs/run-1') {
+        return new Response(JSON.stringify({ id: 'run-1', status: 'failed', exitCode: 1 }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        });
+      }
       throw new Error(`unexpected fetch ${url}`);
     });
     vi.stubGlobal('fetch', fetchMock);
@@ -417,9 +423,70 @@ describe('streamViaDaemon', () => {
     });
 
     expect(fetchMock).not.toHaveBeenCalledWith('/api/runs/run-1/cancel', { method: 'POST' });
-    expect(handlers.onError).toHaveBeenCalledWith(new Error('daemon stream disconnected before run completed'));
+    expect(handlers.onError).toHaveBeenCalled();
     expect(handlers.onDone).not.toHaveBeenCalled();
   });
+
+  it('retries transient SSE HTTP errors instead of failing the active run', async () => {
+    const handlers = createDaemonHandlers();
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(jsonResponse({ runId: 'run-1' }))
+      .mockResolvedValueOnce(new Response('bad gateway', { status: 502 }))
+      .mockResolvedValueOnce(
+        sseResponse('id: 1\nevent: stdout\ndata: {"chunk":"ok"}\n\nid: 2\nevent: end\ndata: {"code":0,"status":"succeeded"}\n\n'),
+      );
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamViaDaemon({
+      agentId: 'mock',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: new AbortController().signal,
+      handlers,
+    });
+
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onDone).toHaveBeenCalledWith('ok');
+  });
+
+  it('keeps reconnecting while run status stays active after reconnect budget', async () => {
+    const handlers = createDaemonHandlers();
+    const controller = new AbortController();
+    let statusPolls = 0;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = String(input);
+      if (init?.signal?.aborted) throw new DOMException('aborted', 'AbortError');
+      if (url === '/api/runs') return jsonResponse({ runId: 'run-1' });
+      if (url.startsWith('/api/runs/run-1/events')) return sseResponse('');
+      if (url === '/api/runs/run-1') {
+        statusPolls += 1;
+        if (statusPolls >= 2) controller.abort();
+        return new Response(
+          JSON.stringify({
+            id: 'run-1',
+            status: 'running',
+            exitCode: null,
+            signal: null,
+          }),
+          { status: 200, headers: { 'content-type': 'application/json' } },
+        );
+      }
+      throw new Error(`unexpected fetch ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+
+    await streamViaDaemon({
+      agentId: 'mock',
+      history: [{ id: '1', role: 'user', content: 'hello' }],
+      systemPrompt: '',
+      signal: controller.signal,
+      handlers,
+    });
+
+    expect(statusPolls).toBeGreaterThanOrEqual(2);
+    expect(handlers.onError).not.toHaveBeenCalled();
+    expect(handlers.onDone).not.toHaveBeenCalled();
+  }, 10_000);
 });
 
 describe('streamMessageOpenAI', () => {

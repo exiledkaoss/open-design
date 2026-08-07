@@ -458,16 +458,21 @@ export async function generateMedia(args) {
   };
 }
 
-function autoOutputName(surface, model, audioKind) {
+export function autoOutputName(surface, model, audioKind) {
   const base = DEFAULT_OUTPUT_BY_SURFACE[surface] || 'artifact.bin';
   const stamp = Date.now().toString(36);
+  // Entropy is required: media generate is async/fire-and-forget, so two
+  // concurrent dispatches (same model, no --output) can share a millisecond
+  // and would otherwise clobber the same path — silent loss of a paid
+  // generation. Match the upload-name pattern used elsewhere in the daemon.
+  const entropy = Math.random().toString(36).slice(2, 8);
   // Slug the model id so the filename stays short and shell-safe.
   const slug = String(model).toLowerCase().replace(/[^a-z0-9]+/g, '-').slice(0, 32);
   const tag = surface === 'audio' && audioKind ? `${audioKind}-${slug}` : slug;
   const dot = base.lastIndexOf('.');
   const stem = dot > 0 ? base.slice(0, dot) : base;
   const ext = dot > 0 ? base.slice(dot) : '';
-  return `${stem}-${tag}-${stamp}${ext}`;
+  return `${stem}-${tag}-${stamp}-${entropy}${ext}`;
 }
 
 function defaultAspectFor(surface) {
