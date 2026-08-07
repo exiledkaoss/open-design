@@ -46,11 +46,19 @@ export function createChatRunService({
     }, ttlMs).unref?.();
   };
 
+  const trimEventBuffer = (run) => {
+    // Bound memory only after the run is terminal. Trimming while active
+    // drops early event ids that refresh/reattach still needs via
+    // `events?after=<lastRunEventId>` (specs/current/run.md).
+    if (run.events.length > maxEvents) {
+      run.events.splice(0, run.events.length - maxEvents);
+    }
+  };
+
   const emit = (run, event, data) => {
     const id = run.nextEventId++;
     const record = { id, event, data };
     run.events.push(record);
-    if (run.events.length > maxEvents) run.events.splice(0, run.events.length - maxEvents);
     run.updatedAt = Date.now();
     for (const sse of run.clients) sse.send(event, data, id);
     return record;
@@ -77,6 +85,7 @@ export function createChatRunService({
     run.updatedAt = Date.now();
     run.promptFileCleaned?.();
     emit(run, 'end', { code, signal, status });
+    trimEventBuffer(run);
     for (const sse of run.clients) sse.end();
     run.clients.clear();
     for (const waiter of run.waiters) waiter(statusBody(run));
