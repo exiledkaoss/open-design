@@ -432,14 +432,20 @@ export async function generateMedia(args) {
   // If the real provider returned a different extension than the
   // requested filename, swap it. Saves the agent from having to guess
   // (.png vs .jpg vs .webp) before it knows what the model emits.
-  let finalOut = safeOut;
-  if (suggestedExt) {
-    const dot = safeOut.lastIndexOf('.');
-    const stem = dot > 0 ? safeOut.slice(0, dot) : safeOut;
-    finalOut = `${stem}${suggestedExt}`;
-  }
-  const finalTarget = path.join(dir, finalOut);
-  await writeFile(finalTarget, bytes);
+  //
+  // Important: a rewritten path must not silently clobber a different
+  // existing file (e.g. --output hero.jpg → hero.png while hero.png
+  // already exists), and concurrent generates that collapse onto the
+  // same stem+suggestedExt (a.jpg + a.webp → a.png) must not race to
+  // one writeFile. Exclusive create + entropy on conflict.
+  const finalOutPreferred = applySuggestedOutputExt(safeOut, suggestedExt);
+  const allowOverwrite = finalOutPreferred === safeOut;
+  const { name: finalOut, target: finalTarget } = await writeMediaOutputExclusive(
+    dir,
+    finalOutPreferred,
+    bytes,
+    { allowOverwrite },
+  );
   const st = await stat(finalTarget);
   return {
     name: finalOut,
@@ -456,6 +462,54 @@ export async function generateMedia(args) {
     intentionalStub,
     warnings,
   };
+}
+
+/**
+ * Apply a provider-suggested extension to a sanitized output name.
+ * Exported for regression tests covering silent clobber / name collapse.
+ */
+export function applySuggestedOutputExt(safeOut, suggestedExt) {
+  if (!suggestedExt) return safeOut;
+  const ext = String(suggestedExt);
+  if (!ext.startsWith('.')) return safeOut;
+  const dot = safeOut.lastIndexOf('.');
+  const stem = dot > 0 ? safeOut.slice(0, dot) : safeOut;
+  const current = dot > 0 ? safeOut.slice(dot) : '';
+  if (current.toLowerCase() === ext.toLowerCase()) return safeOut;
+  return `${stem}${ext}`;
+}
+
+/**
+ * Write media bytes under `dir`/`name`. When `allowOverwrite` is false
+ * (extension rewrite retargeted away from the caller-chosen path), use
+ * O_EXCL and fall back to an entropy suffix on EEXIST so we never
+ * clobber a different file or lose a concurrent generate.
+ */
+export async function writeMediaOutputExclusive(
+  dir,
+  name,
+  bytes,
+  { allowOverwrite = false } = {},
+) {
+  let candidate = name;
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const target = path.join(dir, candidate);
+    try {
+      if (allowOverwrite && attempt === 0) {
+        await writeFile(target, bytes);
+        return { name: candidate, target };
+      }
+      await writeFile(target, bytes, { flag: 'wx' });
+      return { name: candidate, target };
+    } catch (err) {
+      if (err?.code !== 'EEXIST') throw err;
+      const dot = name.lastIndexOf('.');
+      const stem = dot > 0 ? name.slice(0, dot) : name;
+      const ext = dot > 0 ? name.slice(dot) : '';
+      candidate = `${stem}-${Math.random().toString(36).slice(2, 8)}${ext}`;
+    }
+  }
+  throw new Error('could not allocate unique media output name');
 }
 
 function autoOutputName(surface, model, audioKind) {

@@ -19,7 +19,14 @@ const FORBIDDEN_SEGMENT = /^$|^\.\.?$/;
 
 export function projectDir(projectsRoot, projectId) {
   if (!isSafeId(projectId)) throw new Error('invalid project id');
-  return path.join(projectsRoot, projectId);
+  const root = path.resolve(projectsRoot);
+  const dir = path.resolve(root, projectId);
+  // Defense in depth: reject `.` / `..` (and any future id that resolves
+  // outside or onto the projects root) even if isSafeId drifts.
+  if (dir === root || !dir.startsWith(root + path.sep)) {
+    throw new Error('invalid project id');
+  }
+  return dir;
 }
 
 export async function ensureProject(projectsRoot, projectId) {
@@ -235,7 +242,9 @@ function toProjectPath(raw) {
 }
 
 function isSafeId(id) {
-  return typeof id === 'string' && /^[A-Za-z0-9._-]{1,128}$/.test(id);
+  // Must start with an alphanumeric so `.` / `..` cannot pass and resolve
+  // to the projects root or its parent via path.join/path.resolve.
+  return typeof id === 'string' && /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id);
 }
 
 const EXT_MIME = {
