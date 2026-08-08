@@ -527,7 +527,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     try {
       const { id, name, skillId, designSystemId, pendingPrompt, metadata } =
         req.body || {};
-      if (typeof id !== 'string' || !/^[A-Za-z0-9._-]{1,128}$/.test(id)) {
+      if (typeof id !== 'string' || !/^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(id)) {
         return sendApiError(res, 400, 'BAD_REQUEST', 'invalid project id');
       }
       if (typeof name !== 'string' || !name.trim()) {
