@@ -104,7 +104,9 @@ export async function writeProjectFile(
   if (!overwrite) {
     try {
       await stat(target);
-      throw new Error('file already exists');
+      const existsErr = new Error('file already exists');
+      existsErr.code = 'FILE_EXISTS';
+      throw existsErr;
     } catch (err) {
       if (!err || err.code !== 'ENOENT') throw err;
     }

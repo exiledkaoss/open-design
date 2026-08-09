@@ -13,11 +13,14 @@ import {
   fetchDesignSystem,
   fetchProjectFiles,
   fetchSkill,
+  listProjectFileNames,
+  ProjectFileExistsError,
   writeProjectTextFile,
 } from '../providers/registry';
 import { composeSystemPrompt } from '@open-design/contracts';
 import { navigate } from '../router';
 import { agentDisplayName } from '../utils/agentLabels';
+import { pickUniqueArtifactFileName } from '../utils/artifact-filename';
 import type { TodoItem } from '../runtime/todos';
 import {
   createConversation,
@@ -785,7 +788,10 @@ export function ProjectView({
           model: choice?.model ?? null,
           reasoning: choice?.reasoning ?? null,
           onRunCreated: (runId) => {
-            updateMessageById(assistantId, (prev) => ({ ...prev, runId, runStatus: 'queued' }), true);
+            // Only attach the run id here. Status transitions go through
+            // onRunStatus so a Stop that landed while POST /api/runs was in
+            // flight cannot be overwritten back to `queued`.
+            updateMessageById(assistantId, (prev) => ({ ...prev, runId }), true);
           },
           onRunStatus: (runStatus) => {
             updateMessageById(
@@ -835,45 +841,53 @@ export function ProjectView({
 
   const persistArtifact = useCallback(
     async (art: Artifact) => {
-      const baseName = (art.identifier || art.title || 'artifact')
-        .toLowerCase()
-        .replace(/[^a-z0-9_-]+/g, '-')
-        .replace(/^-+|-+$/g, '')
-        .slice(0, 60) || 'artifact';
-      // Pick a name that doesn't collide with an existing project file.
-      // The first run uses `<base>.html`; subsequent runs append `-2`, `-3`…
-      // so prior artifacts aren't silently overwritten.
-      const existing = new Set(projectFiles.map((f) => f.name));
-      let fileName = `${baseName}.html`;
-      let n = 2;
-      while (existing.has(fileName) && savedArtifactRef.current !== fileName) {
-        fileName = `${baseName}-${n}.html`;
-        n += 1;
-      }
-      if (savedArtifactRef.current === fileName) return;
-      savedArtifactRef.current = fileName;
-      const manifest = createHtmlArtifactManifest({
-        entry: fileName,
-        title: art.title || art.identifier || fileName,
-        sourceSkillId: project.skillId ?? undefined,
-        designSystemId: project.designSystemId,
-        metadata: {
-          identifier: art.identifier,
-          inferred: false,
-        },
-      });
-      const file = await writeProjectTextFile(project.id, fileName, art.html, {
-        artifactManifest: manifest,
-      });
-      if (file) {
-        setFilesRefresh((n) => n + 1);
-        // Auto-open the freshly-persisted artifact as a tab so the user
-        // sees it without an extra click. The Write-tool path already does
-        // this for tool-emitted files; this handles the artifact-tag path.
-        requestOpenFile(file.name);
+      // One successful persist per turn. Do not latch the name before the
+      // write succeeds — a failed attempt used to block all retries.
+      if (savedArtifactRef.current) return;
+
+      // Collision checks must see files created mid-turn (agent Write) and
+      // must not treat a failed listing as an empty project (fail-soft `[]`
+      // would pick `<base>.html` and clobber on-disk HTML).
+      const listed = await listProjectFileNames(project.id);
+      if (listed === null) return;
+      const existing = new Set(listed);
+      const baseName = art.identifier || art.title || 'artifact';
+      let fileName = pickUniqueArtifactFileName(baseName, existing);
+
+      // overwrite:false + retry covers races between list and write (e.g.
+      // a late tool Write landing on the same slug).
+      for (let attempt = 0; attempt < 32; attempt += 1) {
+        const manifest = createHtmlArtifactManifest({
+          entry: fileName,
+          title: art.title || art.identifier || fileName,
+          sourceSkillId: project.skillId ?? undefined,
+          designSystemId: project.designSystemId,
+          metadata: {
+            identifier: art.identifier,
+            inferred: false,
+          },
+        });
+        try {
+          const file = await writeProjectTextFile(project.id, fileName, art.html, {
+            artifactManifest: manifest,
+            overwrite: false,
+          });
+          if (!file) return;
+          savedArtifactRef.current = file.name;
+          setFilesRefresh((n) => n + 1);
+          // Auto-open the freshly-persisted artifact as a tab so the user
+          // sees it without an extra click. The Write-tool path already does
+          // this for tool-emitted files; this handles the artifact-tag path.
+          requestOpenFile(file.name);
+          return;
+        } catch (err) {
+          if (!(err instanceof ProjectFileExistsError)) return;
+          existing.add(fileName);
+          fileName = pickUniqueArtifactFileName(baseName, existing);
+        }
       }
     },
-    [project.id, projectFiles, requestOpenFile],
+    [project.designSystemId, project.id, project.skillId, requestOpenFile],
   );
 
   const handleContinueRemainingTasks = useCallback(

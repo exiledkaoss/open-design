@@ -1254,7 +1254,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
           const body = { file: meta };
           return res.json(body);
         }
-        const { name, content, encoding, artifactManifest } = req.body || {};
+        const { name, content, encoding, artifactManifest, overwrite } = req.body || {};
         if (typeof name !== 'string' || typeof content !== 'string') {
           return sendApiError(res, 400, 'BAD_REQUEST', 'name and content required');
         }
@@ -1270,11 +1270,17 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
             : Buffer.from(content, 'utf8');
         const meta = await writeProjectFile(PROJECTS_DIR, req.params.id, name, buf, {
           artifactManifest,
+          // Default remains overwrite=true for back-compat with editors and
+          // uploads; artifact persist passes false to avoid clobber races.
+          overwrite: overwrite === false ? false : true,
         });
         /** @type {import('@open-design/contracts').ProjectFileResponse} */
         const body = { file: meta };
         res.json(body);
       } catch (err) {
+        if (err && err.code === 'FILE_EXISTS') {
+          return sendApiError(res, 409, 'FILE_EXISTS', 'file already exists');
+        }
         sendApiError(res, 500, 'INTERNAL_ERROR', 'upload failed');
       }
     },
