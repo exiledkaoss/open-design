@@ -35,6 +35,19 @@ export interface ProjectFileResponse {
   file: ProjectFile;
 }
 
+/** JSON body for `POST /api/projects/:id/files` text/base64 uploads. */
+export interface WriteProjectFileRequest {
+  name: string;
+  content: string;
+  encoding?: 'utf8' | 'base64';
+  artifactManifest?: ArtifactManifest;
+  /**
+   * When false, refuse to replace an existing file (HTTP 409 FILE_EXISTS).
+   * Defaults to true for editor/upload back-compat.
+   */
+  overwrite?: boolean;
+}
+
 export interface UploadProjectFilesResponse extends ProjectFilesResponse {}
 
 export interface DeleteProjectFileResponse extends OkResponse {}

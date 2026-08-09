@@ -201,6 +201,32 @@ export async function fetchProjectFiles(projectId: string): Promise<ProjectFile[
   }
 }
 
+/**
+ * Fail-closed file-name listing for callers that must not treat transport
+ * errors as an empty project (e.g. artifact persist collision checks).
+ * Returns `null` when the list cannot be trusted.
+ */
+export async function listProjectFileNames(projectId: string): Promise<string[] | null> {
+  try {
+    const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`);
+    if (!resp.ok) return null;
+    const json = (await resp.json()) as { files?: ProjectFile[] };
+    if (!Array.isArray(json.files)) return null;
+    return json.files.map((f) => f.name);
+  } catch {
+    return null;
+  }
+}
+
+export class ProjectFileExistsError extends Error {
+  readonly code = 'FILE_EXISTS';
+
+  constructor(name: string) {
+    super(`file already exists: ${name}`);
+    this.name = 'ProjectFileExistsError';
+  }
+}
+
 export function projectFileUrl(projectId: string, name: string): string {
   return projectRawUrl(projectId, name);
 }
@@ -273,18 +299,27 @@ export async function writeProjectTextFile(
   projectId: string,
   name: string,
   content: string,
-  options?: { artifactManifest?: ArtifactManifest },
+  options?: { artifactManifest?: ArtifactManifest; overwrite?: boolean },
 ): Promise<ProjectFile | null> {
   try {
     const resp = await fetch(`/api/projects/${encodeURIComponent(projectId)}/files`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, content, artifactManifest: options?.artifactManifest }),
+      body: JSON.stringify({
+        name,
+        content,
+        artifactManifest: options?.artifactManifest,
+        overwrite: options?.overwrite,
+      }),
     });
+    if (resp.status === 409) {
+      throw new ProjectFileExistsError(name);
+    }
     if (!resp.ok) return null;
     const json = (await resp.json()) as { file: ProjectFile };
     return json.file;
-  } catch {
+  } catch (err) {
+    if (err instanceof ProjectFileExistsError) throw err;
     return null;
   }
 }

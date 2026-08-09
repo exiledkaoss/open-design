@@ -1,6 +1,67 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchProjectFileText } from './registry';
+import {
+  fetchProjectFileText,
+  listProjectFileNames,
+  ProjectFileExistsError,
+  writeProjectTextFile,
+} from './registry';
+
+describe('listProjectFileNames', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('returns names on success', async () => {
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async () =>
+        Response.json({
+          files: [
+            { name: 'dashboard.html', size: 1, mtime: 1, kind: 'html', mime: 'text/html' },
+            { name: 'notes.md', size: 1, mtime: 1, kind: 'text', mime: 'text/markdown' },
+          ],
+        }),
+      ),
+    );
+    await expect(listProjectFileNames('proj')).resolves.toEqual(['dashboard.html', 'notes.md']);
+  });
+
+  it('returns null on HTTP failure instead of pretending the project is empty', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response('nope', { status: 503 })));
+    await expect(listProjectFileNames('proj')).resolves.toBeNull();
+  });
+});
+
+describe('writeProjectTextFile overwrite', () => {
+  afterEach(() => {
+    vi.restoreAllMocks();
+    vi.unstubAllGlobals();
+  });
+
+  it('sends overwrite:false and surfaces 409 as ProjectFileExistsError', async () => {
+    const fetchMock = vi.fn(async () => new Response('exists', { status: 409 }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    await expect(
+      writeProjectTextFile('proj', 'dashboard.html', '<p>x</p>', { overwrite: false }),
+    ).rejects.toBeInstanceOf(ProjectFileExistsError);
+
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/projects/proj/files',
+      expect.objectContaining({
+        method: 'POST',
+        body: JSON.stringify({
+          name: 'dashboard.html',
+          content: '<p>x</p>',
+          artifactManifest: undefined,
+          overwrite: false,
+        }),
+      }),
+    );
+  });
+});
 
 describe('fetchProjectFileText', () => {
   afterEach(() => {
