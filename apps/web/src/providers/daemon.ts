@@ -129,6 +129,21 @@ export async function streamViaDaemon({
 
     const created = (await createResp.json()) as ChatRunCreateResponse;
     const runId = created.runId;
+
+    // Create is intentionally not tied to `signal`/`cancelSignal` so a
+    // mid-flight Stop cannot leave an orphan daemon run with no id. If the
+    // user canceled while POST /api/runs was in flight, cancel immediately
+    // and never bounce the assistant row back to `queued` (that resurrection
+    // lets attachRecoverableRuns resume the agent after Stop).
+    if (cancelSignal?.aborted) {
+      onRunCreated?.(runId);
+      onRunStatus?.('canceled');
+      void fetch(`/api/runs/${encodeURIComponent(runId)}/cancel`, { method: 'POST' }).catch(
+        () => {},
+      );
+      return;
+    }
+
     onRunCreated?.(runId);
     onRunStatus?.('queued');
     await consumeDaemonRun({
@@ -202,6 +217,7 @@ async function consumeDaemonRun({
   try {
     if (cancelSignal?.aborted) {
       cancelRun();
+      onRunStatus?.('canceled');
       return;
     }
 
