@@ -1594,21 +1594,25 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     if (typeof message !== 'string' || !message.trim()) {
       return design.runs.fail(run, 'BAD_REQUEST', 'message required');
     }
+    // Runs must be project-scoped. Agents are launched with
+    // bypassPermissions / --yolo / equivalent flags, so falling back to the
+    // daemon process cwd or PROJECT_ROOT would let a missing/invalid
+    // projectId operate on the repo (or other host directories) instead of
+    // `.od/projects/<id>/`. Fail closed before spawn.
+    if (typeof projectId !== 'string' || !projectId.trim()) {
+      return design.runs.fail(run, 'BAD_REQUEST', 'projectId required');
+    }
     if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
-    // Resolve the project working directory (creating the folder if it
-    // doesn't exist yet). Without one we don't pass cwd to spawn — the
-    // agent then runs in whatever inherited dir, which still lets API
-    // mode work but loses file-tool addressability.
-    let cwd = null;
+    let cwd;
     let existingProjectFiles = [];
-    if (typeof projectId === 'string' && projectId) {
-      try {
-        cwd = await ensureProject(PROJECTS_DIR, projectId);
-        existingProjectFiles = await listFiles(PROJECTS_DIR, projectId);
-      } catch {
-        cwd = null;
-      }
+    try {
+      cwd = await ensureProject(PROJECTS_DIR, projectId);
+      existingProjectFiles = await listFiles(PROJECTS_DIR, projectId);
+    } catch (err) {
+      const messageText = err instanceof Error ? err.message : 'project unavailable';
+      const code = messageText === 'invalid project id' ? 'BAD_REQUEST' : 'PROJECT_NOT_FOUND';
+      return design.runs.fail(run, code, messageText);
     }
     if (run.cancelRequested || design.runs.isTerminal(run.status)) return;
 
@@ -1623,21 +1627,19 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     // use, then existence-checked. Whatever survives shows up as an
     // explicit list at the bottom of the user message so the agent knows
     // to Read it.
-    const safeAttachments = cwd
-      ? (Array.isArray(attachments) ? attachments : [])
-        .filter((p) => typeof p === 'string' && p.length > 0)
-        .filter((p) => {
-          try {
-            const abs = path.resolve(cwd, p);
-            return (
-              (abs === cwd || abs.startsWith(cwd + path.sep)) &&
-              fs.existsSync(abs)
-            );
-          } catch {
-            return false;
-          }
-        })
-      : [];
+    const safeAttachments = (Array.isArray(attachments) ? attachments : [])
+      .filter((p) => typeof p === 'string' && p.length > 0)
+      .filter((p) => {
+        try {
+          const abs = path.resolve(cwd, p);
+          return (
+            (abs === cwd || abs.startsWith(cwd + path.sep)) &&
+            fs.existsSync(abs)
+          );
+        } catch {
+          return false;
+        }
+      });
 
     // Local code agents don't accept a separate "system" channel the way the
     // Messages API does — we fold the skill + design-system prompt into the
@@ -1652,9 +1654,8 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
           .map((f) => `- ${f.name}`)
           .join('\n')}`
       : '\nThis folder is empty. Choose a clear, descriptive filename for whatever you create.';
-    const cwdHint = cwd
-      ? `\n\nYour working directory: ${cwd}\nWrite project files relative to it (e.g. \`index.html\`, \`assets/x.png\`). The user can browse those files in real time.${filesListBlock}`
-      : '';
+    const cwdHint =
+      `\n\nYour working directory: ${cwd}\nWrite project files relative to it (e.g. \`index.html\`, \`assets/x.png\`). The user can browse those files in real time.${filesListBlock}`;
     const attachmentHint = safeAttachments.length
       ? `\n\nAttached project files: ${safeAttachments.map((p) => `\`${p}\``).join(', ')}`
       : '';
@@ -1666,9 +1667,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     const composed = [
       instructionPrompt
         ? `# Instructions (read first)\n\n${instructionPrompt}${cwdHint}\n\n---\n`
-        : cwdHint
-          ? `# Instructions${cwdHint}\n\n---\n`
-          : '',
+        : `# Instructions${cwdHint}\n\n---\n`,
       `# User request\n\n${message}${attachmentHint}`,
       safeImages.length ? `\n\n${safeImages.map((p) => `@${p}`).join(' ')}` : '',
     ].join('');
@@ -1831,7 +1830,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       child = spawn(resolvedBin, args, {
         env: { ...process.env, ...odMediaEnv },
         stdio: [stdinMode, 'pipe', 'pipe'],
-        cwd: cwd || undefined,
+        cwd,
         shell: useShell,
       });
       run.child = child;
@@ -1872,7 +1871,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       acpSession = attachPiRpcSession({
         child,
         prompt: composed,
-        cwd: cwd || PROJECT_ROOT,
+        cwd,
         model: safeModel,
         send,
       });
@@ -1880,7 +1879,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       acpSession = attachAcpSession({
         child,
         prompt: composed,
-        cwd: cwd || PROJECT_ROOT,
+        cwd,
         model: safeModel,
         send,
       });
