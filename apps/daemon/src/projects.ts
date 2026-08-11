@@ -212,6 +212,15 @@ export function sanitizeName(raw) {
   return cleaned || `file-${Date.now()}`;
 }
 
+// Neutralize control characters (including newlines / Unicode line
+// separators) before interpolating a project-relative path into an agent
+// prompt. Without this, a crafted on-disk name can break out of the file
+// list / attachment section and inject a fake `# User request` block into
+// the composed prompt for yolo/bypassPermissions agents.
+export function promptSafePath(raw) {
+  return String(raw ?? '').replace(/[\u0000-\u001f\u007f\u2028\u2029]/g, ' ');
+}
+
 // multer@1 decodes multipart filenames as latin1, which mangles any
 // UTF-8 bytes (Chinese, Japanese, Cyrillic, ...) the user uploads. Re-
 // decode as UTF-8 when the result round-trips back to the original

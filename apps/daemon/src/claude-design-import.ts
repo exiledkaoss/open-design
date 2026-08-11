@@ -2,7 +2,7 @@
 import { mkdir, readFile, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { inflateRawSync } from 'node:zlib';
-import { validateProjectPath } from './projects.js';
+import { sanitizePath } from './projects.js';
 
 const EOCD_SIG = 0x06054b50;
 const CENTRAL_SIG = 0x02014b50;
@@ -121,7 +121,10 @@ function sanitizeZipPath(name) {
   if (/^[A-Za-z]:/.test(name) || name.startsWith('/')) {
     throw new Error('absolute zip paths are not allowed');
   }
-  return validateProjectPath(name);
+  // Match writeProjectFile / multipart upload: collapse control characters
+  // and reserved punctuation so zip entry names cannot smuggle newlines
+  // (or other prompt-structure breakers) onto disk for later chat runs.
+  return sanitizePath(name);
 }
 
 function chooseEntryFile(paths) {

@@ -48,6 +48,7 @@ import {
   projectDir,
   readProjectFile,
   removeProjectDir,
+  promptSafePath,
   sanitizeName,
   writeProjectFile,
 } from './projects.js';
@@ -665,6 +666,11 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
 
   app.delete('/api/projects/:id', async (req, res) => {
     try {
+      // Cancel before CASCADE/rm so yolo agents cannot keep writing into a
+      // path the user just deleted (child may otherwise recreate the dir).
+      for (const run of design.runs.list({ projectId: req.params.id, status: 'active' })) {
+        design.runs.cancel(run);
+      }
       dbDeleteProject(db, req.params.id);
       await removeProjectDir(PROJECTS_DIR, req.params.id).catch(() => {});
       /** @type {import('@open-design/contracts').OkResponse} */
@@ -713,6 +719,11 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     const conv = getConversation(db, req.params.cid);
     if (!conv || conv.projectId !== req.params.id) {
       return res.status(404).json({ error: 'not found' });
+    }
+    // Stop in-flight agents for this conversation before CASCADE-deleting
+    // its messages; otherwise the child keeps running with no UI linkage.
+    for (const run of design.runs.list({ conversationId: req.params.cid, status: 'active' })) {
+      design.runs.cancel(run);
     }
     deleteConversation(db, req.params.cid);
     res.json({ ok: true });
@@ -1649,14 +1660,14 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
     // filename instead of clobbering a previous artifact.
     const filesListBlock = existingProjectFiles.length
       ? `\nFiles already in this folder (do NOT overwrite unless the user asks; pick a fresh, descriptive name for new artifacts):\n${existingProjectFiles
-          .map((f) => `- ${f.name}`)
+          .map((f) => `- ${promptSafePath(f.name)}`)
           .join('\n')}`
       : '\nThis folder is empty. Choose a clear, descriptive filename for whatever you create.';
     const cwdHint = cwd
       ? `\n\nYour working directory: ${cwd}\nWrite project files relative to it (e.g. \`index.html\`, \`assets/x.png\`). The user can browse those files in real time.${filesListBlock}`
       : '';
     const attachmentHint = safeAttachments.length
-      ? `\n\nAttached project files: ${safeAttachments.map((p) => `\`${p}\``).join(', ')}`
+      ? `\n\nAttached project files: ${safeAttachments.map((p) => `\`${promptSafePath(p)}\``).join(', ')}`
       : '';
     const daemonSystemPrompt = await composeDaemonSystemPrompt({ projectId, skillId, designSystemId });
     const instructionPrompt = [daemonSystemPrompt, systemPrompt]
