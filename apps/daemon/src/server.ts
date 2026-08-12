@@ -1917,9 +1917,16 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       if (acpSession?.hasFatalError()) {
         return design.runs.finish(run, 'failed', code ?? 1, signal ?? null);
       }
+      // Pi (and similar) RPC sessions end stdin then SIGTERM after settle.
+      // Pi maps that SIGTERM to exit 143 — treat intentional teardown as success.
+      const gracefulOk =
+        typeof acpSession?.wasGracefulShutdown === 'function' &&
+        acpSession.wasGracefulShutdown() &&
+        !run.cancelRequested &&
+        (code === 0 || code === 143 || signal === 'SIGTERM');
       const status = run.cancelRequested
         ? 'canceled'
-        : code === 0
+        : gracefulOk || code === 0
           ? 'succeeded'
           : 'failed';
       design.runs.finish(run, status, code, signal);
