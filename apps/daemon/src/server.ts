@@ -8,6 +8,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
 import { composeSystemPrompt } from './prompts/system.js';
+import { promptSafeText } from './prompt-safety.js';
 import {
   detectAgents,
   getAgentDef,
@@ -606,12 +607,14 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       const imported = await importClaudeDesignZip(req.file.path, projectDir(PROJECTS_DIR, id));
       fs.promises.unlink(req.file.path).catch(() => {});
 
+      const safeOriginalName = promptSafeText(originalName);
+      const safeEntryFile = promptSafeText(imported.entryFile);
       const project = insertProject(db, {
         id,
-        name: baseName,
+        name: promptSafeText(baseName) || 'Claude Design import',
         skillId: null,
         designSystemId: null,
-        pendingPrompt: `Imported from Claude Design ZIP: ${originalName}. Continue editing ${imported.entryFile}.`,
+        pendingPrompt: `Imported from Claude Design ZIP: ${safeOriginalName}. Continue editing ${safeEntryFile}.`,
         metadata: {
           kind: 'prototype',
           importedFrom: 'claude-design',
@@ -797,6 +800,17 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       const { name, description, sourceProjectId } = req.body || {};
       if (typeof name !== 'string' || !name.trim()) {
         return res.status(400).json({ error: 'name required' });
+      }
+      // Reject control characters so template labels cannot inject extra
+      // sections into composeSystemPrompt's "Template reference" block.
+      if (/[\u0000-\u001f\u007f\u2028\u2029]/.test(name)) {
+        return res.status(400).json({ error: 'name must not contain control characters' });
+      }
+      if (
+        typeof description === 'string' &&
+        /[\u0000-\u001f\u007f\u2028\u2029]/.test(description)
+      ) {
+        return res.status(400).json({ error: 'description must not contain control characters' });
       }
       if (typeof sourceProjectId !== 'string') {
         return res.status(400).json({ error: 'sourceProjectId required' });

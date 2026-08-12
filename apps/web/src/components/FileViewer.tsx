@@ -232,6 +232,9 @@ function HtmlViewer({
   const [deployment, setDeployment] = useState<DeployProjectFileResponse | null>(null);
   const [deployModalOpen, setDeployModalOpen] = useState(false);
   const [deployConfig, setDeployConfig] = useState<DeployConfigResponse | null>(null);
+  // Gate Save/Deploy until GET /api/deploy/config finishes. Otherwise a click
+  // with still-empty team fields PUTs teamId:"" and clears the saved team.
+  const [deployConfigReady, setDeployConfigReady] = useState(false);
   const [deploying, setDeploying] = useState(false);
   const [deployPhase, setDeployPhase] = useState<'idle' | 'deploying' | 'preparing-link'>('idle');
   const [savingDeployConfig, setSavingDeployConfig] = useState(false);
@@ -448,15 +451,20 @@ function HtmlViewer({
     setDeployError(null);
     setCopiedDeployLink(false);
     setDeployPhase('idle');
+    setDeployConfigReady(false);
     const [config, deployments] = await Promise.all([
       fetchDeployConfig(),
       fetchProjectDeployments(projectId),
     ]);
-    if (config) {
+    if (!config) {
+      setDeployError(t('fileViewer.deployConfigSaveFailed'));
+      setDeployConfigReady(false);
+    } else {
       setDeployConfig(config);
       setVercelToken(config.tokenMask || '');
       setTeamId(config.teamId || '');
       setTeamSlug(config.teamSlug || '');
+      setDeployConfigReady(true);
     }
     const current = deployments.find(
       (item) => item.fileName === file.name && item.providerId === 'vercel-self',
@@ -466,6 +474,7 @@ function HtmlViewer({
   }
 
   async function saveDeployConfig() {
+    if (!deployConfigReady) return null;
     setSavingDeployConfig(true);
     setDeployError(null);
     try {
@@ -489,6 +498,7 @@ function HtmlViewer({
   }
 
   async function deployToVercel() {
+    if (!deployConfigReady) return;
     setDeploying(true);
     setDeployPhase('deploying');
     setDeployError(null);
@@ -962,7 +972,7 @@ function HtmlViewer({
                 <button
                   type="button"
                   className="ghost-link button-like"
-                  disabled={savingDeployConfig}
+                  disabled={!deployConfigReady || savingDeployConfig}
                   onClick={() => {
                     void saveDeployConfig();
                   }}
@@ -1066,7 +1076,9 @@ function HtmlViewer({
               <button
                 type="button"
                 className="viewer-action primary"
-                disabled={deploying || savingDeployConfig || deployPhase !== 'idle'}
+                disabled={
+                  !deployConfigReady || deploying || savingDeployConfig || deployPhase !== 'idle'
+                }
                 onClick={() => {
                   void deployToVercel();
                 }}
