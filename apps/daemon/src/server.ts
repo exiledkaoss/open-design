@@ -7,8 +7,8 @@ import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import fs from 'node:fs';
 import os from 'node:os';
-import { promptSafeText } from '@open-design/contracts';
 import { composeSystemPrompt } from './prompts/system.js';
+import { promptSafeText } from './prompt-safety.js';
 import {
   detectAgents,
   getAgentDef,
