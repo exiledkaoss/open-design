@@ -12,6 +12,7 @@ import {
   type JsonIpcServerHandle,
   type SidecarRuntimeContext,
 } from "@open-design/sidecar";
+import { stopProcessTree } from "@open-design/platform";
 
 import { startServer } from "../src/server.js";
 
@@ -64,7 +65,7 @@ function attachParentMonitor(stop: () => Promise<void>): void {
 export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarStamp>): Promise<DaemonSidecarHandle> {
   const started = await startServer({ port: parsePort(process.env[DAEMON_PORT_ENV]), returnServer: true }) as
     | string
-    | { server: Server; url: string };
+    | { server: Server; url: string; cancelActiveRuns?: () => void };
   if (typeof started === "string") {
     throw new Error("daemon startServer did not return a server handle");
   }
@@ -88,6 +89,12 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
     stopped = true;
     state.state = "stopped";
     state.updatedAt = new Date().toISOString();
+    // Cancel in-memory runs first so child close handlers record `canceled`
+    // rather than `failed`, then reap the whole descendant tree. `process.exit`
+    // does not kill spawned agent CLIs / npx renders; without this they keep
+    // writing into the project dir after tools-dev/packaged report stopped.
+    serverHandle.cancelActiveRuns?.();
+    await stopProcessTree(process.pid).catch(() => undefined);
     await ipcServer?.close().catch(() => undefined);
     await closeHttpServer(serverHandle.server).catch(() => undefined);
     resolveStopped();

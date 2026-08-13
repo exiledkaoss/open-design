@@ -22,7 +22,7 @@ import {
   resolveAppIpcPath,
   type SidecarRuntimeContext,
 } from "@open-design/sidecar";
-import { createProcessStampArgs, stopProcesses, waitForProcessExit } from "@open-design/platform";
+import { createProcessStampArgs, stopProcessTree, waitForProcessExit } from "@open-design/platform";
 
 import type { PackagedNamespacePaths } from "./paths.js";
 
@@ -191,7 +191,7 @@ async function closeManagedChild(child: ManagedSidecarChild): Promise<void> {
   }
 
   if (!(await waitForProcessExit(child.child.pid, 5000))) {
-    await stopProcesses([child.child.pid]);
+    await stopProcessTree(child.child.pid);
   }
 
   await child.logHandle.close().catch(() => undefined);

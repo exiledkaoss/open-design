@@ -132,6 +132,10 @@ export function createChatRunService({
     }
   };
 
+  const cancelAllActive = () => {
+    for (const run of list({ status: 'active' })) cancel(run);
+  };
+
   const wait = (run) => {
     if (TERMINAL_RUN_STATUSES.has(run.status)) return Promise.resolve(statusBody(run));
     return new Promise((resolve) => run.waiters.add(resolve));
@@ -144,6 +148,7 @@ export function createChatRunService({
     list,
     stream,
     cancel,
+    cancelAllActive,
     wait,
     emit,
     finish,
