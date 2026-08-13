@@ -93,7 +93,7 @@ export async function startDaemonSidecar(runtime: SidecarRuntimeContext<SidecarS
     // rather than `failed`, then reap the whole descendant tree. `process.exit`
     // does not kill spawned agent CLIs / npx renders; without this they keep
     // writing into the project dir after tools-dev/packaged report stopped.
-    started.cancelActiveRuns?.();
+    serverHandle.cancelActiveRuns?.();
     await stopProcessTree(process.pid).catch(() => undefined);
     await ipcServer?.close().catch(() => undefined);
     await closeHttpServer(serverHandle.server).catch(() => undefined);
