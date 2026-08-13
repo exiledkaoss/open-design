@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  collectProcessTreePids,
   createProcessStampArgs,
   matchesStampedProcess,
   readProcessStampFromCommand,
@@ -78,5 +79,21 @@ describe("generic process stamp primitives", () => {
     expect(matchesStampedProcess({ command }, { app: "ui", namespace: stamp.namespace, source: "tool" }, fakeContract)).toBe(true);
     expect(matchesStampedProcess({ command }, { namespace: "stamp-boundary-b" }, fakeContract)).toBe(false);
     expect(matchesStampedProcess({ command }, { source: "pack" }, fakeContract)).toBe(false);
+  });
+});
+
+describe("collectProcessTreePids", () => {
+  it("includes grandchildren of the stamped root and skips unrelated trees", () => {
+    const processes = [
+      { pid: 1, ppid: 0, command: "init" },
+      { pid: 10, ppid: 1, command: "daemon" },
+      { pid: 11, ppid: 10, command: "claude" },
+      { pid: 12, ppid: 11, command: "bash" },
+      { pid: 20, ppid: 1, command: "unrelated" },
+    ];
+
+    expect(collectProcessTreePids(processes, [10])).toEqual([12, 11, 10]);
+    expect(collectProcessTreePids(processes, [20])).toEqual([20]);
+    expect(collectProcessTreePids(processes, [null, undefined])).toEqual([]);
   });
 });

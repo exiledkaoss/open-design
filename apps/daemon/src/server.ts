@@ -2108,7 +2108,7 @@ export async function startServer({ port = 7456, returnServer = false } = {}) {
       const address = server.address();
       const actualPort = typeof address === 'object' && address ? address.port : port;
       const url = `http://127.0.0.1:${actualPort}`;
-      resolve(returnServer ? { url, server } : url);
+      resolve(returnServer ? { url, server, cancelActiveRuns: () => design.runs.cancelAllActive() } : url);
     });
   });
 }

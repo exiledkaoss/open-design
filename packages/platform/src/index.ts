@@ -328,6 +328,16 @@ async function waitForProcessesToExit(pids: number[], timeoutMs = 5000): Promise
   return pids.filter(isProcessAlive);
 }
 
+export async function stopProcessTree(
+  rootPid: number | null | undefined,
+): Promise<StopProcessesResult> {
+  if (typeof rootPid !== "number") {
+    return { alreadyStopped: true, forcedPids: [], matchedPids: [], remainingPids: [], stoppedPids: [] };
+  }
+  const processes = await listProcessSnapshots();
+  return await stopProcesses(collectProcessTreePids(processes, [rootPid]));
+}
+
 export async function stopProcesses(pids: Array<number | null | undefined>): Promise<StopProcessesResult> {
   const uniquePids = [...new Set(pids)]
     .filter((pid): pid is number => typeof pid === "number" && pid !== process.pid)
