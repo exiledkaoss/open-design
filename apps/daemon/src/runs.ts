@@ -6,7 +6,6 @@ export const TERMINAL_RUN_STATUSES = new Set(['succeeded', 'failed', 'canceled']
 export function createChatRunService({
   createSseResponse,
   createSseErrorPayload,
-  maxEvents = 2_000,
   ttlMs = 30 * 60 * 1000,
 }) {
   const runs = new Map();
@@ -49,8 +48,10 @@ export function createChatRunService({
   const emit = (run, event, data) => {
     const id = run.nextEventId++;
     const record = { id, event, data };
+    // Keep every event for the run lifetime. Reattach uses
+    // `GET /events?after=<lastRunEventId>` and a ring buffer would drop the
+    // gap, permanently omitting assistant text from the durable transcript.
     run.events.push(record);
-    if (run.events.length > maxEvents) run.events.splice(0, run.events.length - maxEvents);
     run.updatedAt = Date.now();
     for (const sse of run.clients) sse.send(event, data, id);
     return record;
