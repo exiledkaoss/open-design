@@ -34,6 +34,7 @@ import { OFFICIAL_DESIGNER_PROMPT } from './official-system';
 import { DISCOVERY_AND_PHILOSOPHY } from './discovery';
 import { DECK_FRAMEWORK_DIRECTIVE } from './deck-framework';
 import { MEDIA_GENERATION_CONTRACT } from './media-contract';
+import { promptSafeFenced, promptSafeText } from './prompt-safety';
 
 export const BASE_SYSTEM_PROMPT = OFFICIAL_DESIGNER_PROMPT;
 
@@ -149,7 +150,7 @@ function renderMetadataBlock(
 
   if (metadata.kind === 'prototype') {
     lines.push(
-      `- **fidelity**: ${metadata.fidelity ?? '(unknown — ask: wireframe vs high-fidelity)'}`,
+      `- **fidelity**: ${promptSafeText(metadata.fidelity ?? '(unknown — ask: wireframe vs high-fidelity)')}`,
     );
   }
   if (metadata.kind === 'deck') {
@@ -162,18 +163,18 @@ function renderMetadataBlock(
       `- **animations**: ${typeof metadata.animations === 'boolean' ? metadata.animations : '(unknown — ask: include motion/animations?)'}`,
     );
     if (metadata.templateLabel) {
-      lines.push(`- **template**: ${metadata.templateLabel}`);
+      lines.push(`- **template**: ${promptSafeText(metadata.templateLabel)}`);
     }
   }
   if (metadata.kind === 'image') {
     lines.push(
-      `- **imageModel**: ${metadata.imageModel ?? '(unknown - ask: which image model to use)'}`,
+      `- **imageModel**: ${promptSafeText(metadata.imageModel ?? '(unknown - ask: which image model to use)')}`,
     );
     lines.push(
-      `- **aspectRatio**: ${metadata.imageAspect ?? '(unknown - ask: 1:1, 16:9, 9:16, 4:3, 3:4)'}`,
+      `- **aspectRatio**: ${promptSafeText(metadata.imageAspect ?? '(unknown - ask: 1:1, 16:9, 9:16, 4:3, 3:4)')}`,
     );
     if (metadata.imageStyle) {
-      lines.push(`- **styleNotes**: ${metadata.imageStyle}`);
+      lines.push(`- **styleNotes**: ${promptSafeText(metadata.imageStyle)}`);
     }
     lines.push('');
     lines.push(
@@ -182,13 +183,13 @@ function renderMetadataBlock(
   }
   if (metadata.kind === 'video') {
     lines.push(
-      `- **videoModel**: ${metadata.videoModel ?? '(unknown - ask: which video model to use)'}`,
+      `- **videoModel**: ${promptSafeText(metadata.videoModel ?? '(unknown - ask: which video model to use)')}`,
     );
     lines.push(
       `- **lengthSeconds**: ${typeof metadata.videoLength === 'number' ? metadata.videoLength : '(unknown - ask: 3s / 5s / 10s)'}`,
     );
     lines.push(
-      `- **aspectRatio**: ${metadata.videoAspect ?? '(unknown - ask: 16:9, 9:16, 1:1)'}`,
+      `- **aspectRatio**: ${promptSafeText(metadata.videoAspect ?? '(unknown - ask: 16:9, 9:16, 1:1)')}`,
     );
     lines.push('');
     lines.push(
@@ -202,16 +203,16 @@ function renderMetadataBlock(
   }
   if (metadata.kind === 'audio') {
     lines.push(
-      `- **audioKind**: ${metadata.audioKind ?? '(unknown - ask: music / speech / sfx)'}`,
+      `- **audioKind**: ${promptSafeText(metadata.audioKind ?? '(unknown - ask: music / speech / sfx)')}`,
     );
     lines.push(
-      `- **audioModel**: ${metadata.audioModel ?? '(unknown - ask: which audio model to use)'}`,
+      `- **audioModel**: ${promptSafeText(metadata.audioModel ?? '(unknown - ask: which audio model to use)')}`,
     );
     lines.push(
       `- **durationSeconds**: ${typeof metadata.audioDuration === 'number' ? metadata.audioDuration : '(unknown - ask: target duration)'}`,
     );
     if (metadata.voice) {
-      lines.push(`- **voice**: ${metadata.voice}`);
+      lines.push(`- **voice**: ${promptSafeText(metadata.voice)}`);
     } else if (metadata.audioKind === 'speech') {
       lines.push('- **voice**: (unknown - ask: voice id / accent / pacing)');
     }
@@ -222,16 +223,19 @@ function renderMetadataBlock(
   }
 
   if (metadata.inspirationDesignSystemIds && metadata.inspirationDesignSystemIds.length > 0) {
+    const ids = metadata.inspirationDesignSystemIds.map(promptSafeText).join(', ');
     lines.push(
-      `- **inspirationDesignSystemIds**: ${metadata.inspirationDesignSystemIds.join(', ')} — the user picked these systems as *additional* inspiration alongside the primary one. Borrow palette accents, typographic personality, or component patterns from them; don't replace the primary system's tokens.`,
+      `- **inspirationDesignSystemIds**: ${ids} — the user picked these systems as *additional* inspiration alongside the primary one. Borrow palette accents, typographic personality, or component patterns from them; don't replace the primary system's tokens.`,
     );
   }
 
   if (metadata.kind === 'template' && template && template.files.length > 0) {
+    const safeName = promptSafeText(template.name);
+    const safeDesc = template.description
+      ? ` (${promptSafeText(template.description)})`
+      : '';
     lines.push('');
-    lines.push(
-      `### Template reference — "${template.name}"${template.description ? ` (${template.description})` : ''}`,
-    );
+    lines.push(`### Template reference — "${safeName}"${safeDesc}`);
     lines.push(
       'These HTML snapshots are what the user wants to start FROM. Read them as a stylistic + structural reference. You may copy structure, palette, typography, and component patterns; you may adapt them to the new brief; do NOT ship them verbatim. The agent should still produce its own artifact, just one that visibly inherits this template\'s design language.',
     );
@@ -243,9 +247,11 @@ function renderMetadataBlock(
           ? `${f.content.slice(0, 12000)}\n<!-- … truncated (${f.content.length - 12000} chars omitted) -->`
           : f.content;
       lines.push('');
-      lines.push(`#### \`${f.name}\``);
+      lines.push(`#### \`${promptSafeText(f.name)}\``);
       lines.push('```html');
-      lines.push(truncated);
+      // Neutralize fences inside the body so crafted content cannot close
+      // this block and inject a fake "# User request" into Instructions.
+      lines.push(promptSafeFenced(truncated));
       lines.push('```');
     }
   }

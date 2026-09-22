@@ -22,6 +22,7 @@ import {
   listProcessSnapshots,
   matchesStampedProcess,
   readLogTail,
+  readProcessStampFromCommand,
   spawnBackgroundProcess,
   stopProcesses,
 } from "@open-design/platform";
@@ -678,6 +679,34 @@ function commandMatchesDesktopMarker(
   return command.includes(marker.executablePath) || command.includes(macAppExecutablePath(marker.appPath));
 }
 
+/**
+ * Stale desktop-root markers can outlive a SIGKILL'd process. PID reuse plus a
+ * shared Open Design.app binary must not let `tools-pack mac stop --namespace A`
+ * kill namespace B: require the *live* process command stamp to match.
+ */
+export function liveDesktopProcessMatchesMarker(options: {
+  expectedIpc: string;
+  expectedNamespace: string;
+  marker: DesktopRootIdentityMarker;
+  processCommand: string;
+}): boolean {
+  if (!commandMatchesDesktopMarker(options.processCommand, options.marker)) return false;
+
+  const liveStamp = readProcessStampFromCommand(
+    options.processCommand,
+    OPEN_DESIGN_SIDECAR_CONTRACT,
+  );
+  if (liveStamp == null) return false;
+
+  return (
+    liveStamp.app === APP_KEYS.DESKTOP &&
+    liveStamp.mode === SIDECAR_MODES.RUNTIME &&
+    liveStamp.namespace === options.expectedNamespace &&
+    liveStamp.ipc === options.expectedIpc &&
+    (liveStamp.source === SIDECAR_SOURCES.PACKAGED || liveStamp.source === SIDECAR_SOURCES.TOOLS_PACK)
+  );
+}
+
 async function resolveDesktopRootIdentityFallback(config: ToolPackConfig): Promise<{
   fallback: DesktopRootIdentityFallback;
   rootPid: number | null;
@@ -729,12 +758,19 @@ async function resolveDesktopRootIdentityFallback(config: ToolPackConfig): Promi
     };
   }
 
-  if (!commandMatchesDesktopMarker(processInfo.command, marker)) {
+  if (
+    !liveDesktopProcessMatchesMarker({
+      expectedIpc,
+      expectedNamespace: config.namespace,
+      marker,
+      processCommand: processInfo.command,
+    })
+  ) {
     return {
       fallback: {
         ...fallback,
         processCommand: processInfo.command,
-        reason: "marker-command-mismatch",
+        reason: "marker-live-stamp-mismatch",
       },
       rootPid: null,
     };
@@ -755,6 +791,7 @@ function isUnmanagedDesktopFallback(fallback: DesktopRootIdentityFallback | unde
     "marker-matched",
     "marker-not-found",
     "marker-pid-not-running",
+    "marker-live-stamp-mismatch",
   ].includes(fallback.reason);
 }
 

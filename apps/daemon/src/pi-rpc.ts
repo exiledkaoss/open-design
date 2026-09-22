@@ -10,14 +10,26 @@
  *   3. pi streams events on stdout (agent_start, message_update, …)
  *   4. We translate them to: status, text_delta, thinking_delta,
  *      tool_use, tool_result, usage
- *   5. On `agent_end` we finish the SSE stream
+ *   5. On `agent_settled` (not bare `agent_end`) we finish the SSE stream
  *
  * Extension UI requests from pi are auto-resolved (the web UI has no
  * dialog surfaces), and fire-and-forget notifications are silently
  * consumed to keep the protocol clean.
+ *
+ * Settlement note: Pi's `agent_end` only means one low-level agent loop
+ * finished. Auto-retry, overflow compaction, and queued continuations
+ * can still follow (`willRetry: true` on `agent_end`, or work that only
+ * appears after `agent_end`). The session is idle only at `agent_settled`.
+ * Closing stdin / SIGTERM on the first `agent_end` aborts those recoveries
+ * and can mark a successful turn failed (SIGTERM → exit 143).
  */
 
 import { createJsonLineStream } from './acp.js';
+
+function legacySettleFallbackMs() {
+  // Read at call time so PI_LEGACY_SETTLE_FALLBACK_MS can be tuned/tests override it.
+  return Number(process.env.PI_LEGACY_SETTLE_FALLBACK_MS) || 2000;
+}
 
 // sendCommand is scoped inside attachPiRpcSession to avoid sharing
 // the RPC id counter across concurrent sessions.
@@ -72,13 +84,16 @@ function replyExtensionUi(writable, raw) {
  * @param {string} [opts.cwd]    - working directory
  * @param {string|null} [opts.model] - model id (null = default)
  * @param {function} opts.send   - SSE send function
- * @returns {{ hasFatalError(): boolean }}
+ * @returns {{ hasFatalError(): boolean, wasGracefulShutdown(): boolean }}
  */
 export function attachPiRpcSession({ child, prompt, cwd, model, send }) {
   const runStartedAt = Date.now();
   let finished = false;
   let fatal = false;
+  let gracefulShutdown = false;
   let sentFirstToken = false;
+  /** @type {ReturnType<typeof setTimeout> | null} */
+  let legacySettleTimer = null;
 
   let nextRpcId = 1;
 
@@ -91,7 +106,50 @@ export function attachPiRpcSession({ child, prompt, cwd, model, send }) {
   // Track the prompt request id so we know when the prompt response arrives.
   let promptRpcId = null;
 
+  const cancelLegacySettleTimer = () => {
+    if (legacySettleTimer != null) {
+      clearTimeout(legacySettleTimer);
+      legacySettleTimer = null;
+    }
+  };
+
+  /**
+   * Single-shot /api/chat: close stdin so Pi exits, then SIGTERM if it
+   * lingers. Marked graceful so exit 143 is not treated as a failed run.
+   */
+  const beginGracefulShutdown = () => {
+    cancelLegacySettleTimer();
+    if (finished) return;
+    finished = true;
+    gracefulShutdown = true;
+    try {
+      child.stdin.end();
+    } catch {}
+    // Grace period before SIGTERM. Configurable via PI_GRACEFUL_SHUTDOWN_MS
+    // for resource-constrained machines where the event loop drains slowly.
+    const shutdownMs = Number(process.env.PI_GRACEFUL_SHUTDOWN_MS) || 5000;
+    setTimeout(() => {
+      if (!child.killed) child.kill('SIGTERM');
+    }, shutdownMs);
+  };
+
+  /**
+   * Older Pi builds may lack `agent_settled`. After a non-retrying
+   * `agent_end`, wait briefly; if no further agent activity arrives,
+   * shut down. Modern Pi cancels this when `agent_settled` fires (or
+   * when retry/compaction starts another loop).
+   */
+  const scheduleLegacySettleFallback = () => {
+    cancelLegacySettleTimer();
+    if (finished) return;
+    legacySettleTimer = setTimeout(() => {
+      legacySettleTimer = null;
+      beginGracefulShutdown();
+    }, legacySettleFallbackMs());
+  };
+
   const fail = (message) => {
+    cancelLegacySettleTimer();
     if (finished) return;
     finished = true;
     fatal = true;
@@ -128,29 +186,31 @@ export function attachPiRpcSession({ child, prompt, cwd, model, send }) {
     // ---- Agent events ----
 
     if (raw.type === 'agent_start') {
+      // A new low-level loop started (retry / compaction continue / etc.).
+      cancelLegacySettleTimer();
       send('agent', { type: 'status', label: 'working' });
       return;
     }
 
     if (raw.type === 'agent_end') {
-      finished = true;
-      // pi's RPC process stays alive after agent_end (designed for
-      // multi-prompt sessions). The daemon's /api/chat is single-shot,
-      // so close stdin and let the process exit naturally, or kill it
-      // after a grace period.
-      try {
-        child.stdin.end();
-      } catch {}
-      // Grace period before SIGTERM. Configurable via PI_GRACEFUL_SHUTDOWN_MS
-      // for resource-constrained machines where the event loop drains slowly.
-      const shutdownMs = Number(process.env.PI_GRACEFUL_SHUTDOWN_MS) || 5000;
-      setTimeout(() => {
-        if (!child.killed) child.kill('SIGTERM');
-      }, shutdownMs);
+      // Not session-complete: retry/compaction/queued work may follow.
+      // See Pi RPC docs: prefer `agent_settled`.
+      if (raw.willRetry === true) {
+        cancelLegacySettleTimer();
+        return;
+      }
+      scheduleLegacySettleFallback();
+      return;
+    }
+
+    if (raw.type === 'agent_settled') {
+      // True idle: no automatic retry, compaction retry, or queued work.
+      beginGracefulShutdown();
       return;
     }
 
     if (raw.type === 'turn_start') {
+      cancelLegacySettleTimer();
       send('agent', { type: 'status', label: 'thinking' });
       return;
     }
@@ -265,11 +325,14 @@ export function attachPiRpcSession({ child, prompt, cwd, model, send }) {
 
     // Compaction, retry, queue_update — informational only. Forward as
     // status so the UI stays aware, but don't break the main text flow.
+    // Also cancel the legacy settle fallback: more work is coming.
     if (raw.type === 'compaction_start') {
+      cancelLegacySettleTimer();
       send('agent', { type: 'status', label: 'compacting' });
       return;
     }
     if (raw.type === 'auto_retry_start') {
+      cancelLegacySettleTimer();
       send('agent', { type: 'status', label: 'retrying' });
       return;
     }
@@ -288,6 +351,9 @@ export function attachPiRpcSession({ child, prompt, cwd, model, send }) {
   return {
     hasFatalError() {
       return fatal;
+    },
+    wasGracefulShutdown() {
+      return gracefulShutdown;
     },
   };
 }

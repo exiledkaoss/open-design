@@ -1,7 +1,42 @@
 // @ts-nocheck
-import { test } from 'vitest';
+import { test, afterEach } from 'vitest';
 import assert from 'node:assert/strict';
-import { parsePiModels } from '../src/pi-rpc.js';
+import { EventEmitter } from 'node:events';
+import { attachPiRpcSession, parsePiModels } from '../src/pi-rpc.js';
+
+const originalLegacySettleMs = process.env.PI_LEGACY_SETTLE_FALLBACK_MS;
+const originalGraceMs = process.env.PI_GRACEFUL_SHUTDOWN_MS;
+
+afterEach(() => {
+  if (originalLegacySettleMs === undefined) delete process.env.PI_LEGACY_SETTLE_FALLBACK_MS;
+  else process.env.PI_LEGACY_SETTLE_FALLBACK_MS = originalLegacySettleMs;
+  if (originalGraceMs === undefined) delete process.env.PI_GRACEFUL_SHUTDOWN_MS;
+  else process.env.PI_GRACEFUL_SHUTDOWN_MS = originalGraceMs;
+});
+
+function createMockPiChild() {
+  const child = new EventEmitter();
+  child.killed = false;
+  child.stdin = new EventEmitter();
+  child.stdin.ended = false;
+  child.stdin.write = () => true;
+  child.stdin.end = () => {
+    child.stdin.ended = true;
+  };
+  child.stdout = new EventEmitter();
+  child.kill = (signal) => {
+    child.killed = true;
+    child.killSignal = signal;
+  };
+  child.emitStdout = (obj) => {
+    child.stdout.emit('data', `${JSON.stringify(obj)}\n`);
+  };
+  return child;
+}
+
+function wait(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 // ─── parsePiModels ─────────────────────────────────────────────────────────
 
@@ -484,4 +519,87 @@ test('pi RPC: no duplicate usage when both message_end and turn_end carry usage'
   const usageEvents = events.filter((e) => e.type === 'usage');
   assert.equal(usageEvents.length, 1, 'should emit exactly one usage event per turn');
   assert.equal(usageEvents[0].usage.input_tokens, 100);
+});
+
+// ─── Settlement / teardown (attachPiRpcSession) ─────────────────────────────
+
+test('pi RPC: agent_end with willRetry does not close stdin (retry must proceed)', async () => {
+  process.env.PI_LEGACY_SETTLE_FALLBACK_MS = '30';
+  process.env.PI_GRACEFUL_SHUTDOWN_MS = '50';
+  const child = createMockPiChild();
+  const session = attachPiRpcSession({
+    child,
+    prompt: 'hello',
+    send: () => {},
+  });
+
+  child.emitStdout({ type: 'agent_start' });
+  child.emitStdout({ type: 'agent_end', messages: [], willRetry: true });
+  await wait(60);
+
+  assert.equal(child.stdin.ended, false, 'stdin must stay open during retry backoff');
+  assert.equal(child.killed, false);
+  assert.equal(session.wasGracefulShutdown(), false);
+});
+
+test('pi RPC: agent_settled begins graceful shutdown', async () => {
+  process.env.PI_LEGACY_SETTLE_FALLBACK_MS = '5000';
+  process.env.PI_GRACEFUL_SHUTDOWN_MS = '20';
+  const child = createMockPiChild();
+  const session = attachPiRpcSession({
+    child,
+    prompt: 'hello',
+    send: () => {},
+  });
+
+  child.emitStdout({ type: 'agent_start' });
+  child.emitStdout({ type: 'agent_end', messages: [], willRetry: false });
+  // Still open before settle (legacy fallback is intentionally long here).
+  assert.equal(child.stdin.ended, false);
+  child.emitStdout({ type: 'agent_settled' });
+
+  assert.equal(child.stdin.ended, true);
+  assert.equal(session.wasGracefulShutdown(), true);
+  await wait(40);
+  assert.equal(child.killed, true);
+  assert.equal(child.killSignal, 'SIGTERM');
+});
+
+test('pi RPC: compaction_start cancels legacy settle fallback', async () => {
+  process.env.PI_LEGACY_SETTLE_FALLBACK_MS = '30';
+  process.env.PI_GRACEFUL_SHUTDOWN_MS = '50';
+  const child = createMockPiChild();
+  const session = attachPiRpcSession({
+    child,
+    prompt: 'hello',
+    send: () => {},
+  });
+
+  child.emitStdout({ type: 'agent_end', messages: [], willRetry: false });
+  child.emitStdout({ type: 'compaction_start' });
+  await wait(60);
+
+  assert.equal(child.stdin.ended, false, 'compaction must not be aborted by settle fallback');
+  assert.equal(session.wasGracefulShutdown(), false);
+
+  child.emitStdout({ type: 'agent_settled' });
+  assert.equal(session.wasGracefulShutdown(), true);
+});
+
+test('pi RPC: legacy settle fallback shuts down when agent_settled never arrives', async () => {
+  process.env.PI_LEGACY_SETTLE_FALLBACK_MS = '25';
+  process.env.PI_GRACEFUL_SHUTDOWN_MS = '50';
+  const child = createMockPiChild();
+  const session = attachPiRpcSession({
+    child,
+    prompt: 'hello',
+    send: () => {},
+  });
+
+  child.emitStdout({ type: 'agent_end', messages: [], willRetry: false });
+  assert.equal(child.stdin.ended, false);
+  await wait(50);
+
+  assert.equal(child.stdin.ended, true);
+  assert.equal(session.wasGracefulShutdown(), true);
 });
