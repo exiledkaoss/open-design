@@ -297,6 +297,8 @@ export const zhCN: Dict = {
 
   'project.backToProjects': '返回项目列表',
   'project.metaFreeform': '自由设计',
+  'project.error.loadConversations': '无法加载对话。请重新打开项目后重试。',
+  'project.error.loadMessages': '无法加载消息。请重新选择对话后重试。',
   'chat.tabChat': '对话',
   'chat.tabComments': '评论',
   'chat.commentsSoon': '评论 — 即将上线',

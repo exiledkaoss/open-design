@@ -302,6 +302,10 @@ export const fa: Dict = {
 
   'project.backToProjects': 'بازگشت به پروژه‌ها',
   'project.metaFreeform': 'آزاد',
+  'project.error.loadConversations':
+    'بارگذاری گفتگوها ممکن نشد. برای تلاش دوباره پروژه را دوباره باز کنید.',
+  'project.error.loadMessages':
+    'بارگذاری پیام‌ها ممکن نشد. برای تلاش دوباره گفتگو را دوباره انتخاب کنید.',
   'chat.tabChat': 'چت',
   'chat.tabComments': 'نظرات',
   'chat.commentsSoon': 'نظرات — به زودی',

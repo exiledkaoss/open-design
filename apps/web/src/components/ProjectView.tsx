@@ -138,12 +138,18 @@ export function ProjectView({
 
   // Load conversations on project switch. If none exist (older projects
   // pre-conversations, or a freshly created one whose default seed got
-  // dropped), create one on the fly.
+  // dropped), create one on the fly. Transport failures return null and
+  // must not be treated as an empty list — that would spawn a spurious
+  // conversation and hide existing history.
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const list = await listConversations(project.id);
       if (cancelled) return;
+      if (list == null) {
+        setError(t('project.error.loadConversations'));
+        return;
+      }
       if (list.length === 0) {
         const fresh = await createConversation(project.id);
         if (cancelled) return;
@@ -159,11 +165,12 @@ export function ProjectView({
     return () => {
       cancelled = true;
     };
-  }, [project.id]);
+  }, [project.id, t]);
 
   // Load messages whenever the active conversation changes. This happens
   // on project mount (after conversations load) and on user-triggered
-  // conversation switches.
+  // conversation switches. Transport failures return null — surface an
+  // error instead of silently presenting an empty transcript.
   useEffect(() => {
     if (!activeConversationId) {
       setMessages([]);
@@ -173,6 +180,11 @@ export function ProjectView({
     (async () => {
       const list = await listMessages(project.id, activeConversationId);
       if (cancelled) return;
+      if (list == null) {
+        setMessages([]);
+        setError(t('project.error.loadMessages'));
+        return;
+      }
       setMessages(list);
       setArtifact(null);
       setError(null);
@@ -182,7 +194,7 @@ export function ProjectView({
     return () => {
       cancelled = true;
     };
-  }, [project.id, activeConversationId]);
+  }, [project.id, activeConversationId, t]);
 
   useEffect(() => {
     return () => {
@@ -797,6 +809,14 @@ export function ProjectView({
               }),
               true,
             );
+            // consumeDaemonRun returns without onDone/onError when the daemon
+            // reports canceled (e.g. Stop in another tab). Clear the local
+            // streaming latch so the composer and attachRecoverableRuns recover.
+            if (runStatus === 'canceled') {
+              setStreaming(false);
+              if (abortRef.current === controller) abortRef.current = null;
+              if (cancelRef.current === cancelController) cancelRef.current = null;
+            }
           },
           onRunEventId: (lastRunEventId) => {
             updateMessageById(assistantId, (prev) => ({ ...prev, lastRunEventId }));

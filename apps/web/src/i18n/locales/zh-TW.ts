@@ -297,6 +297,8 @@ export const zhTW: Dict = {
 
   'project.backToProjects': '返回專案列表',
   'project.metaFreeform': '自由設計',
+  'project.error.loadConversations': '無法載入對話。請重新開啟專案後重試。',
+  'project.error.loadMessages': '無法載入訊息。請重新選擇對話後重試。',
   'chat.tabChat': '對話',
   'chat.tabComments': '評論',
   'chat.commentsSoon': '評論 — 即將上線',

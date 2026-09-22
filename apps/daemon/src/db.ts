@@ -600,17 +600,30 @@ export function listMessages(db, conversationId) {
 
 export function upsertMessage(db, conversationId, m) {
   const existing = db
-    .prepare(`SELECT position FROM messages WHERE id = ?`)
+    .prepare(
+      `SELECT position, conversation_id AS conversationId FROM messages WHERE id = ?`,
+    )
     .get(m.id);
   const now = Date.now();
   if (existing) {
+    // Message ids are globally unique. A PUT under conversation B must not
+    // silently rewrite a row that still belongs to conversation A (e.g. a
+    // stale persist after the UI switched conversations, or a confused client).
+    if (existing.conversationId !== conversationId) {
+      const err = new Error(
+        `message ${m.id} belongs to conversation ${existing.conversationId}, not ${conversationId}`,
+      );
+      err.code = 'MESSAGE_CONVERSATION_MISMATCH';
+      err.status = 409;
+      throw err;
+    }
     db.prepare(
       `UPDATE messages
           SET role = ?, content = ?, agent_id = ?, agent_name = ?,
               run_id = ?, run_status = ?, last_run_event_id = ?,
               events_json = ?, attachments_json = ?,
               produced_files_json = ?, started_at = ?, ended_at = ?
-        WHERE id = ?`,
+        WHERE id = ? AND conversation_id = ?`,
     ).run(
       m.role,
       m.content,
@@ -625,6 +638,7 @@ export function upsertMessage(db, conversationId, m) {
       m.startedAt ?? null,
       m.endedAt ?? null,
       m.id,
+      conversationId,
     );
   } else {
     const max = db

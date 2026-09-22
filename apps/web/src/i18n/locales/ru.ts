@@ -300,6 +300,10 @@ export const ru: Dict = {
 
   'project.backToProjects': 'Назад к проектам',
   'project.metaFreeform': 'произвольная форма',
+  'project.error.loadConversations':
+    'Не удалось загрузить беседы. Откройте проект снова, чтобы повторить.',
+  'project.error.loadMessages':
+    'Не удалось загрузить сообщения. Выберите беседу снова, чтобы повторить.',
   'chat.tabChat': 'Чат',
   'chat.tabComments': 'Комментарии',
   'chat.commentsSoon': 'Комментарии — скоро',

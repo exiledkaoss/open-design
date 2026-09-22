@@ -2,8 +2,10 @@
 // daemon's SQLite store. All writes round-trip through HTTP so projects
 // stay coherent across multiple browser tabs and across restarts.
 //
-// These helpers fail soft (returning null / [] on transport errors) so
-// the UI can stay rendered when the daemon is briefly unreachable.
+// These helpers fail soft on transport errors so the UI can stay
+// rendered when the daemon is briefly unreachable. List helpers that
+// drive “empty ⇒ create/seed” or full state replacement return `null`
+// on failure so callers do not confuse an outage with an empty result.
 
 import type {
   ChatMessage,
@@ -163,18 +165,19 @@ export async function deleteProject(id: string): Promise<boolean> {
 
 // ---------- conversations ----------
 
+/** `null` means transport/HTTP failure — callers must not treat it as “no conversations”. */
 export async function listConversations(
   projectId: string,
-): Promise<Conversation[]> {
+): Promise<Conversation[] | null> {
   try {
     const resp = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/conversations`,
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const json = (await resp.json()) as { conversations: Conversation[] };
     return json.conversations ?? [];
   } catch {
-    return [];
+    return null;
   }
 }
 
@@ -238,19 +241,20 @@ export async function deleteConversation(
 
 // ---------- messages ----------
 
+/** `null` means transport/HTTP failure — callers must not treat it as “no messages”. */
 export async function listMessages(
   projectId: string,
   conversationId: string,
-): Promise<ChatMessage[]> {
+): Promise<ChatMessage[] | null> {
   try {
     const resp = await fetch(
       `/api/projects/${encodeURIComponent(projectId)}/conversations/${encodeURIComponent(conversationId)}/messages`,
     );
-    if (!resp.ok) return [];
+    if (!resp.ok) return null;
     const json = (await resp.json()) as { messages: ChatMessage[] };
     return json.messages ?? [];
   } catch {
-    return [];
+    return null;
   }
 }
 
