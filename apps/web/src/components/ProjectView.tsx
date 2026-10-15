@@ -31,6 +31,11 @@ import {
   saveMessage,
   saveTabs,
 } from '../state/projects';
+import {
+  nextStreamingTranscript,
+  overlayStreamingTranscripts,
+  type StreamingTranscript,
+} from '../state/streaming-transcript';
 import type {
   AgentEvent,
   AgentInfo,
@@ -99,6 +104,12 @@ export function ProjectView({
     null,
   );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const messagesRef = useRef<ChatMessage[]>([]);
+  messagesRef.current = messages;
+  // Durable copy of assistant messages whose run is still producing tokens.
+  // The on-screen list follows the active conversation, so a switch mid-run
+  // must not be the only place those tokens live.
+  const transcriptsRef = useRef<Map<string, StreamingTranscript>>(new Map());
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
@@ -173,7 +184,9 @@ export function ProjectView({
     (async () => {
       const list = await listMessages(project.id, activeConversationId);
       if (cancelled) return;
-      setMessages(list);
+      setMessages(
+        overlayStreamingTranscripts(list, transcriptsRef.current, activeConversationId),
+      );
       setArtifact(null);
       setError(null);
       savedArtifactRef.current = null;
@@ -185,17 +198,16 @@ export function ProjectView({
   }, [project.id, activeConversationId]);
 
   useEffect(() => {
+    const streams = reattachControllersRef.current;
     return () => {
-      for (const controller of reattachControllersRef.current.values()) {
-        controller.abort();
-      }
-      for (const controller of reattachCancelControllersRef.current.values()) {
-        controller.abort();
-      }
-      reattachControllersRef.current.clear();
-      reattachCancelControllersRef.current.clear();
+      // This project view unmounts when the user leaves the project. Detach
+      // the SSE readers so they stop touching state. Do not abort the cancel
+      // controllers: those POST /cancel and kill the agent. Switching
+      // conversations is not a project change and must not come through here.
+      for (const controller of streams.values()) controller.abort();
+      streams.clear();
     };
-  }, [project.id, activeConversationId]);
+  }, [project.id]);
 
   // Hydrate the open-tabs state once per project. After this initial
   // load, every mutation flows through saveTabsState() which keeps DB +
@@ -361,31 +373,38 @@ export function ProjectView({
 
   const persistMessageById = useCallback(
     (messageId: string) => {
+      const snap = transcriptsRef.current.get(messageId);
+      if (snap) {
+        void saveMessage(project.id, snap.conversationId, snap.message);
+        return;
+      }
       if (!activeConversationId) return;
-      setMessages((curr) => {
-        const found = curr.find((m) => m.id === messageId);
-        if (found) void saveMessage(project.id, activeConversationId, found);
-        return curr;
-      });
+      const found = messagesRef.current.find((m) => m.id === messageId);
+      if (found) void saveMessage(project.id, activeConversationId, found);
     },
     [project.id, activeConversationId],
   );
 
   const updateMessageById = useCallback(
     (messageId: string, updater: (message: ChatMessage) => ChatMessage, persist = false) => {
-      setMessages((curr) => {
-        let saved: ChatMessage | null = null;
-        const next = curr.map((m) => {
-          if (m.id !== messageId) return m;
-          const updated = updater(m);
-          saved = updated;
-          return updated;
-        });
-        if (persist && saved && activeConversationId) {
-          void saveMessage(project.id, activeConversationId, saved);
-        }
-        return next;
-      });
+      const conversationId = activeConversationId;
+      if (!conversationId) return;
+      const next = nextStreamingTranscript(
+        transcriptsRef.current.get(messageId) ?? null,
+        messagesRef.current,
+        conversationId,
+        messageId,
+        updater,
+      );
+      if (!next || next.message === transcriptsRef.current.get(messageId)?.message) return;
+      transcriptsRef.current.set(messageId, next);
+      if (persist) void saveMessage(project.id, next.conversationId, next.message);
+      const updated = next.message;
+      setMessages((curr) =>
+        curr.some((m) => m.id === messageId)
+          ? curr.map((m) => (m.id === messageId ? updated : m))
+          : curr,
+      );
     },
     [project.id, activeConversationId],
   );
@@ -416,6 +435,12 @@ export function ProjectView({
         if (!runId) continue;
         if (reattachControllersRef.current.has(runId)) continue;
         if (completedReattachRunsRef.current.has(runId)) continue;
+        if (!transcriptsRef.current.has(message.id)) {
+          transcriptsRef.current.set(message.id, {
+            conversationId: activeConversationId,
+            message,
+          });
+        }
 
         if (fallbackRun && !message.runId) {
           updateMessageById(
@@ -545,6 +570,8 @@ export function ProjectView({
             }
           })
           .finally(() => {
+            const snap = transcriptsRef.current.get(message.id);
+            if (snap) void saveMessage(project.id, snap.conversationId, snap.message);
             if (persistTimer) clearTimeout(persistTimer);
             reattachControllersRef.current.delete(runId);
             reattachCancelControllersRef.current.delete(runId);
@@ -603,13 +630,15 @@ export function ProjectView({
         startedAt,
       };
       const nextHistory = [...messages, userMsg];
+      const conversationId = activeConversationId;
+      transcriptsRef.current.set(assistantId, { conversationId, message: assistantMsg });
       setMessages([...nextHistory, assistantMsg]);
       setStreaming(true);
       setArtifact(null);
       savedArtifactRef.current = null;
       onTouchProject();
       persistMessage(userMsg);
-      persistMessage(assistantMsg);
+      persistMessageById(assistantId);
       // If this is the first turn, derive a working title from the prompt
       // so the conversation is identifiable in the dropdown without a
       // round-trip through the agent.
@@ -634,9 +663,7 @@ export function ProjectView({
       let liveHtml = '';
 
       const updateAssistant = (updater: (prev: ChatMessage) => ChatMessage) => {
-        setMessages((curr) =>
-          curr.map((m) => (m.id === assistantId ? updater(m) : m)),
-        );
+        updateMessageById(assistantId, updater);
       };
       let persistTimer: ReturnType<typeof setTimeout> | null = null;
       const persistAssistantSoon = () => {
@@ -729,18 +756,15 @@ export function ProjectView({
           // chips.
           void refreshProjectFiles().then((nextFiles) => {
             const produced = nextFiles.filter((f) => !beforeFileNames.has(f.name));
-            setMessages((curr) => {
-              const updated = curr.map((m) =>
-                m.id === assistantId
-                  ? produced.length > 0
-                    ? { ...m, producedFiles: produced }
-                    : m
-                  : m,
+            if (produced.length > 0) {
+              updateMessageById(
+                assistantId,
+                (prev) => ({ ...prev, producedFiles: produced }),
+                true,
               );
-              const finalized = updated.find((m) => m.id === assistantId);
-              if (finalized) persistMessage(finalized);
-              return updated;
-            });
+            } else {
+              persistMessageById(assistantId);
+            }
           });
           onProjectsRefresh();
         },
@@ -754,11 +778,7 @@ export function ProjectView({
           setStreaming(false);
           abortRef.current = null;
           cancelRef.current = null;
-          setMessages((curr) => {
-            const finalized = curr.find((m) => m.id === assistantId);
-            if (finalized) persistMessage(finalized);
-            return curr;
-          });
+          persistMessageById(assistantId);
           void refreshProjectFiles();
         },
       };
@@ -933,9 +953,29 @@ export function ProjectView({
     }
     reattachControllersRef.current.clear();
     setStreaming(false);
+    for (const snap of transcriptsRef.current.values()) {
+      if (snap.message.role !== 'assistant') continue;
+      let updated: ChatMessage | null = null;
+      if (isActiveRunStatus(snap.message.runStatus)) {
+        updated = { ...snap.message, runStatus: 'canceled', endedAt: snap.message.endedAt ?? stoppedAt };
+      } else if (snap.message.endedAt === undefined) {
+        updated = { ...snap.message, endedAt: stoppedAt };
+      }
+      if (!updated) continue;
+      transcriptsRef.current.set(snap.message.id, {
+        conversationId: snap.conversationId,
+        message: updated,
+      });
+      void saveMessage(project.id, snap.conversationId, updated);
+    }
     setMessages((curr) => {
       const finalized: ChatMessage[] = [];
       const next = curr.map((m) => {
+        const snap = transcriptsRef.current.get(m.id);
+        if (snap && snap.conversationId === activeConversationId) {
+          finalized.push(snap.message);
+          return snap.message;
+        }
         if (m.role !== 'assistant') return m;
         if (isActiveRunStatus(m.runStatus)) {
           const updated = { ...m, runStatus: 'canceled' as const, endedAt: m.endedAt ?? stoppedAt };
@@ -952,7 +992,7 @@ export function ProjectView({
       for (const message of finalized) persistMessage(message);
       return next;
     });
-  }, [persistMessage]);
+  }, [activeConversationId, persistMessage, project.id]);
 
   const handleNewConversation = useCallback(async () => {
     const fresh = await createConversation(project.id);
