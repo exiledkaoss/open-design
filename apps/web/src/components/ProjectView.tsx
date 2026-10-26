@@ -19,6 +19,7 @@ import { composeSystemPrompt } from '@open-design/contracts';
 import { navigate } from '../router';
 import { agentDisplayName } from '../utils/agentLabels';
 import type { TodoItem } from '../runtime/todos';
+import { isConversationHistoryReady } from '../state/message-list';
 import {
   createConversation,
   deleteConversation as deleteConversationApi,
@@ -99,6 +100,9 @@ export function ProjectView({
     null,
   );
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  // Conversation id whose rows were applied from listMessages. A send before
+  // this matches the active conversation races that GET and drops the turn.
+  const [loadedConversationId, setLoadedConversationId] = useState<string | null>(null);
   const [streaming, setStreaming] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [artifact, setArtifact] = useState<Artifact | null>(null);
@@ -166,14 +170,18 @@ export function ProjectView({
   // conversation switches.
   useEffect(() => {
     if (!activeConversationId) {
+      setLoadedConversationId(null);
       setMessages([]);
       return;
     }
+    const conversationId = activeConversationId;
+    setLoadedConversationId(null);
     let cancelled = false;
     (async () => {
-      const list = await listMessages(project.id, activeConversationId);
+      const list = await listMessages(project.id, conversationId);
       if (cancelled) return;
       setMessages(list);
+      setLoadedConversationId(conversationId);
       setArtifact(null);
       setError(null);
       savedArtifactRef.current = null;
@@ -183,6 +191,8 @@ export function ProjectView({
       cancelled = true;
     };
   }, [project.id, activeConversationId]);
+
+  const historyReady = isConversationHistoryReady(loadedConversationId, activeConversationId);
 
   useEffect(() => {
     return () => {
@@ -572,7 +582,12 @@ export function ProjectView({
 
   const handleSend = useCallback(
     async (prompt: string, attachments: ChatAttachment[]) => {
-      if (!activeConversationId) return;
+      if (
+        !activeConversationId ||
+        !isConversationHistoryReady(loadedConversationId, activeConversationId)
+      ) {
+        return;
+      }
       setError(null);
       const startedAt = Date.now();
       const userMsg: ChatMessage = {
@@ -818,6 +833,7 @@ export function ProjectView({
     },
     [
       activeConversationId,
+      loadedConversationId,
       messages,
       config,
       agentsById,
@@ -1099,6 +1115,7 @@ export function ProjectView({
           key={activeConversationId ?? 'no-conv'}
           messages={messages}
           streaming={streaming}
+          historyReady={historyReady}
           error={error}
           projectId={project.id}
           projectFiles={projectFiles}
