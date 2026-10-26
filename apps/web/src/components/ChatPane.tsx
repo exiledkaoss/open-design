@@ -44,6 +44,10 @@ const EXAMPLE_PROMPT_KEYS: Array<{
 interface Props {
   messages: ChatMessage[];
   streaming: boolean;
+  // False while the active conversation's history GET is still in flight.
+  // The composer must not submit into that window: the late GET replaces
+  // the message list and the live turn is dropped.
+  historyReady?: boolean;
   error: string | null;
   projectId: string | null;
   projectFiles: ProjectFile[];
@@ -82,6 +86,7 @@ type Tab = 'chat' | 'comments';
 export function ChatPane({
   messages,
   streaming,
+  historyReady = true,
   error,
   projectId,
   projectFiles,
@@ -403,6 +408,7 @@ export function ChatPane({
             projectId={projectId}
             projectFiles={projectFiles}
             streaming={streaming || hasActiveRunMessage}
+            sendDisabled={!historyReady}
             initialDraft={initialDraft}
             onEnsureProject={onEnsureProject}
             onSend={onSend}

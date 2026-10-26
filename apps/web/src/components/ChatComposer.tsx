@@ -17,6 +17,9 @@ interface Props {
   projectId: string | null;
   projectFiles: ProjectFile[];
   streaming: boolean;
+  // When true, keep the draft and ignore submit. Used while conversation
+  // history is still loading so a send cannot race the history GET.
+  sendDisabled?: boolean;
   initialDraft?: string;
   // Lazy ensure — the composer calls this before its first upload, so the
   // project folder exists on disk before files land in it. Returns the
@@ -52,6 +55,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
       projectId,
       projectFiles,
       streaming,
+      sendDisabled = false,
       initialDraft,
       onEnsureProject,
       onSend,
@@ -241,7 +245,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
 
     async function submit() {
       const prompt = draft.trim();
-      if (!prompt || streaming) return;
+      if (!prompt || streaming || sendDisabled) return;
       onSend(prompt, staged);
       reset();
     }
@@ -389,7 +393,7 @@ export const ChatComposer = forwardRef<ChatComposerHandle, Props>(
                 className="composer-send"
                 data-testid="chat-send"
                 onClick={() => void submit()}
-                disabled={!draft.trim()}
+                disabled={!draft.trim() || sendDisabled}
               >
                 <Icon name="send" size={13} />
                 <span>{t('chat.send')}</span>
