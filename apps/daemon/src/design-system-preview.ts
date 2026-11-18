@@ -346,9 +346,8 @@ function extractFonts(raw) {
   let m;
   while ((m = re.exec(raw)) !== null) {
     const label = m[1].toLowerCase();
-    const value = m[2].trim().replace(/[*_`]+$/g, '').trim();
-    if (!/[a-zA-Z]/.test(value)) continue;
-    if (value.startsWith('#')) continue;
+    const value = cssFontStack(m[2].trim().replace(/[*_`]+$/g, '').trim());
+    if (!value) continue;
     if (/display|heading|h1|title/.test(label) && !out.display) out.display = value;
     else if (/body|text|paragraph|copy/.test(label) && !out.body) out.body = value;
     else if (/mono|code/.test(label) && !out.mono) out.mono = value;
@@ -407,6 +406,19 @@ function escapeHtml(s) {
   return String(s).replace(/[&<>"']/g, (c) =>
     c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : c === '"' ? '&quot;' : '&#39;',
   );
+}
+
+// Font stacks are interpolated into a <style> block. Keep only characters
+// that can appear in a font-family list so a DESIGN.md line cannot close
+// the style element or the declaration (`</style>`, `}`, extra properties).
+function cssFontStack(value) {
+  if (typeof value !== 'string') return null;
+  const cleaned = value
+    .replace(/[^\p{L}\p{N} ,.'"()\-_:/]/gu, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+  if (!cleaned || !/\p{L}/u.test(cleaned) || cleaned.startsWith('#')) return null;
+  return cleaned;
 }
 
 // Tiny markdown renderer — enough for our DESIGN.md prose: H1–H4, paragraphs,
